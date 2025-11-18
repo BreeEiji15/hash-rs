@@ -16,6 +16,7 @@ use benchmark::BenchmarkEngine;
 use database::DatabaseFormat;
 use error::HashUtilityError;
 use std::process;
+use std::io::IsTerminal;
 
 fn main() {
     // Parse command-line arguments
@@ -26,6 +27,17 @@ fn main() {
             process::exit(1);
         }
     };
+    
+    // Check if running with no arguments and stdin is a terminal (not piped)
+    // If so, show help instead of waiting for stdin
+    if cli.command.is_none() && cli.file.is_none() && cli.text.is_none() && std::io::stdin().is_terminal() {
+        // Show full help by simulating --help flag
+        use clap::CommandFactory;
+        let mut cmd = cli::Cli::command();
+        cmd.print_help().unwrap();
+        println!(); // Add newline after help
+        process::exit(0);
+    }
     
     // Dispatch to appropriate handler
     let result = match cli.command {
