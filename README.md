@@ -225,25 +225,3 @@ See [SIMD_OPTIMIZATION.md](SIMD_OPTIMIZATION.md) for details.
 | Slow performance | Use `-p` for parallel, `-f` for fast mode, or BLAKE3 |
 | Fast mode not working | Fast mode only works with files (not stdin/text) |
 | .hashignore not working | Check file location: `/path/to/dir/.hashignore` |
-
-## Development
-
-```bash
-cargo test --release                    # Run tests
-cargo build --release                   # Build
-RUSTFLAGS="-C target-cpu=native" cargo build --release  # Optimized
-```
-
-## Requirements
-
-- Rust 1.70+
-- No runtime dependencies
-
-## License
-
-[Add your license here]
-
-## Acknowledgments
-
-- [RustCrypto](https://github.com/RustCrypto)
-- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3)
