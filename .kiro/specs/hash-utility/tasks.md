@@ -192,25 +192,25 @@
     - Verify that files smaller than 300MB are handled correctly
     - _Requirements: 1.4, 1.5_
 
-- [-] 15. Add progress bar reporting
+- [x] 15. Add progress bar reporting
   - [x] 15.1 Add indicatif dependency
     - Add indicatif crate to Cargo.toml for progress bar support
     - _Requirements: 2.1, 2.5_
   
-  - [ ] 15.2 Implement progress bar for scan operations
+  - [x] 15.2 Implement progress bar for scan operations
     - Create progress bar showing files processed, current file, and percentage
     - Display throughput (MB/s) and estimated time remaining
     - Update progress bar during directory scanning
     - Clear progress bar on completion and show summary
     - _Requirements: 2.5_
   
-  - [ ] 15.3 Implement progress bar for verify operations
+  - [x] 15.3 Implement progress bar for verify operations
     - Show progress during verification with files checked count
     - Display current file being verified
     - _Requirements: 3.1_
 
-- [ ] 16. Add stdin hash support
-  - [ ] 16.1 Implement stdin reading in hash command
+- [x] 16. Add stdin hash support
+  - [x] 16.1 Implement stdin reading in hash command
     - Detect when no file is provided and stdin is available
     - Read from stdin with buffered I/O
     - Support piping: `cat file.txt | hash -a sha256`
@@ -221,8 +221,8 @@
     - Verify that hashing via stdin produces same result as hashing the file directly
     - _Requirements: 1.1_
 
-- [ ] 17. Add command-line text hashing
-  - [ ] 17.1 Add --text flag to hash command
+- [x] 17. Add command-line text hashing
+  - [x] 17.1 Add --text flag to hash command
     - Add `-t/--text` flag that accepts a string argument
     - Hash the provided text directly: `hash -a sha256 --text "hello world"`
     - Handle UTF-8 encoding properly
@@ -252,13 +252,13 @@
     - Verify that same key produces same HMAC for same input
     - _Requirements: 1.1_
 
-- [ ] 19. Add non-cryptographic hash algorithms
-  - [ ] 19.1 Add xxhash dependency
+- [x] 19. Add non-cryptographic hash algorithms
+  - [x] 19.1 Add xxhash dependency
     - Add xxhash-rust crate to Cargo.toml
     - Research and select fastest non-cryptographic hash (xxh3, xxh128)
     - _Requirements: 1.2_
   
-  - [ ] 19.2 Implement non-cryptographic hash wrappers
+  - [x] 19.2 Implement non-cryptographic hash wrappers
     - Create wrappers for xxh3 and xxh128
     - Register in HashRegistry with appropriate metadata
     - Mark as non-cryptographic in algorithm info

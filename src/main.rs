@@ -27,20 +27,21 @@ fn main() {
     
     // Dispatch to appropriate handler
     let result = match cli.command {
-        Command::Hash { file, algorithms, output, fast } => {
-            handle_hash_command(&file, &algorithms, output.as_deref(), fast)
-        }
-        Command::Scan { directory, algorithm, output, parallel, fast } => {
+        Some(Command::Scan { directory, algorithm, output, parallel, fast }) => {
             handle_scan_command(&directory, &algorithm, &output, parallel, fast)
         }
-        Command::Verify { database, directory } => {
+        Some(Command::Verify { database, directory }) => {
             handle_verify_command(&database, &directory)
         }
-        Command::Benchmark { size_mb } => {
+        Some(Command::Benchmark { size_mb }) => {
             handle_benchmark_command(size_mb)
         }
-        Command::List => {
+        Some(Command::List) => {
             handle_list_command()
+        }
+        None => {
+            // No subcommand means hash mode (default)
+            handle_hash_command(cli.file.as_deref(), cli.text.as_deref(), &cli.algorithms, cli.output.as_deref(), cli.fast)
         }
     };
     
@@ -51,9 +52,10 @@ fn main() {
     }
 }
 
-/// Handle the hash command: compute and display hash(es) for a file
+/// Handle the hash command: compute and display hash(es) for a file, text, or stdin
 fn handle_hash_command(
-    file: &std::path::Path,
+    file: Option<&std::path::Path>,
+    text: Option<&str>,
     algorithms: &[String],
     output: Option<&std::path::Path>,
     fast: bool,
@@ -61,16 +63,45 @@ fn handle_hash_command(
     let computer = HashComputer::new();
     
     // Compute hashes for all specified algorithms
-    let results = if fast {
-        // Use fast mode for each algorithm
-        let mut results = Vec::new();
-        for algorithm in algorithms {
-            results.push(computer.compute_hash_fast(file, algorithm)?);
+    let results = match (file, text) {
+        (Some(file_path), None) => {
+            // Hash from file
+            if fast {
+                // Use fast mode for each algorithm
+                let mut results = Vec::new();
+                for algorithm in algorithms {
+                    results.push(computer.compute_hash_fast(file_path, algorithm)?);
+                }
+                results
+            } else {
+                // Use normal mode
+                computer.compute_multiple_hashes(file_path, algorithms)?
+            }
         }
-        results
-    } else {
-        // Use normal mode
-        computer.compute_multiple_hashes(file, algorithms)?
+        (None, Some(text_input)) => {
+            // Hash from text (fast mode not supported for text)
+            if fast {
+                return Err(HashUtilityError::InvalidArguments {
+                    message: "Fast mode is not supported when hashing text".to_string(),
+                });
+            }
+            computer.compute_multiple_hashes_text(text_input, algorithms)?
+        }
+        (None, None) => {
+            // Hash from stdin (fast mode not supported for stdin)
+            if fast {
+                return Err(HashUtilityError::InvalidArguments {
+                    message: "Fast mode is not supported when reading from stdin".to_string(),
+                });
+            }
+            computer.compute_multiple_hashes_stdin(algorithms)?
+        }
+        (Some(_), Some(_)) => {
+            // This should be prevented by clap's conflicts_with, but handle it anyway
+            return Err(HashUtilityError::InvalidArguments {
+                message: "Cannot specify both file and text arguments".to_string(),
+            });
+        }
     };
     
     // Format output
@@ -147,12 +178,13 @@ fn handle_list_command() -> Result<(), HashUtilityError> {
     let algorithms = HashRegistry::list_algorithms();
     
     println!("\nAvailable Hash Algorithms:\n");
-    println!("{:<20} {:>12} {:>15}", "Algorithm", "Output Bits", "Post-Quantum");
-    println!("{}", "-".repeat(50));
+    println!("{:<20} {:>12} {:>15} {:>15}", "Algorithm", "Output Bits", "Post-Quantum", "Cryptographic");
+    println!("{}", "-".repeat(65));
     
     for algo in algorithms {
         let pq_status = if algo.post_quantum { "Yes" } else { "No" };
-        println!("{:<20} {:>12} {:>15}", algo.name, algo.output_bits, pq_status);
+        let crypto_status = if algo.cryptographic { "Yes" } else { "No" };
+        println!("{:<20} {:>12} {:>15} {:>15}", algo.name, algo.output_bits, pq_status, crypto_status);
     }
     
     println!();

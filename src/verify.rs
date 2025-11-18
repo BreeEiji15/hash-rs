@@ -9,6 +9,7 @@ use crate::database::{DatabaseHandler, DatabaseEntry};
 use crate::hash::HashComputer;
 use crate::path_utils;
 use crate::error::HashUtilityError;
+use indicatif::{ProgressBar, ProgressStyle};
 
 // Re-export HashUtilityError as VerifyError for backward compatibility
 pub type VerifyError = HashUtilityError;
@@ -132,9 +133,24 @@ impl VerifyEngine {
         let mut missing_files = Vec::new();
         let mut checked_files = HashSet::new();
         
+        // Create progress bar
+        let pb = ProgressBar::new(database_canonical.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({percent}%) | {msg}")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        
         // Check each file in the database
         for (db_path, entry) in &database_canonical {
             checked_files.insert(db_path.clone());
+            
+            // Update progress bar with current file
+            let file_name = db_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            pb.set_message(format!("Verifying: {}", file_name));
             
             if current_files.contains(db_path) {
                 // File exists, compute current hash using the mode specified in the database
@@ -164,7 +180,12 @@ impl VerifyEngine {
                 // File in database but not in filesystem
                 missing_files.push(db_path.clone());
             }
+            
+            pb.inc(1);
         }
+        
+        // Clear progress bar
+        pb.finish_and_clear();
         
         // Find new files (in filesystem but not in database)
         let new_files: Vec<PathBuf> = current_files

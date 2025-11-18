@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
+use indicatif::{ProgressBar, ProgressStyle};
 
 // Re-export HashUtilityError as ScanError for backward compatibility
 pub type ScanError = HashUtilityError;
@@ -114,16 +115,22 @@ impl ScanEngine {
         let mut files_failed = 0;
         let mut total_bytes = 0u64;
         
+        // Create progress bar
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({percent}%) | {msg}")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        
         // Process each file
-        for (index, file_path) in files.iter().enumerate() {
-            // Display progress
-            if (index + 1) % 10 == 0 || index + 1 == files.len() {
-                println!("Processing file {}/{}: {}", 
-                    index + 1, 
-                    files.len(), 
-                    file_path.display()
-                );
-            }
+        for file_path in files.iter() {
+            // Update progress bar with current file
+            let file_name = file_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            pb.set_message(format!("Processing: {}", file_name));
             
             // Compute hash for the file (using fast mode if enabled)
             let hash_result = if self.fast_mode {
@@ -166,16 +173,27 @@ impl ScanEngine {
                     files_failed += 1;
                 }
             }
+            
+            pb.inc(1);
         }
         
         let duration = start_time.elapsed();
         
-        // Display summary
+        // Clear progress bar and display summary
+        pb.finish_and_clear();
+        
         println!("\nScan complete!");
         println!("Files processed: {}", files_processed);
         println!("Files failed: {}", files_failed);
-        println!("Total bytes: {}", total_bytes);
+        println!("Total bytes: {} ({:.2} MB)", total_bytes, total_bytes as f64 / 1_048_576.0);
         println!("Duration: {:.2}s", duration.as_secs_f64());
+        
+        // Calculate and display throughput
+        if duration.as_secs_f64() > 0.0 {
+            let throughput_mbps = (total_bytes as f64 / 1_048_576.0) / duration.as_secs_f64();
+            println!("Throughput: {:.2} MB/s", throughput_mbps);
+        }
+        
         println!("Output written to: {}", output.display());
         
         Ok(ScanStats {
@@ -200,19 +218,25 @@ impl ScanEngine {
         let files_failed = Arc::new(Mutex::new(0usize));
         let total_bytes = Arc::new(Mutex::new(0u64));
         
+        // Create progress bar
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({percent}%) | {msg}")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        
         // Capture fast_mode for use in closure
         let fast_mode = self.fast_mode;
         
         // Compute hashes in parallel
-        let results: Vec<_> = files.par_iter().enumerate().map(|(index, file_path)| {
-            // Display progress (thread-safe)
-            if (index + 1) % 10 == 0 || index + 1 == files.len() {
-                println!("Processing file {}/{}: {}", 
-                    index + 1, 
-                    files.len(), 
-                    file_path.display()
-                );
-            }
+        let results: Vec<_> = files.par_iter().map(|file_path| {
+            // Update progress bar with current file (thread-safe)
+            let file_name = file_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            pb.set_message(format!("Processing: {}", file_name));
             
             // Compute hash for the file (using fast mode if enabled)
             let computer = HashComputer::new();
@@ -222,7 +246,7 @@ impl ScanEngine {
                 computer.compute_hash(file_path, algorithm)
             };
             
-            match hash_result {
+            let result = match hash_result {
                 Ok(result) => {
                     // Try to get relative path for cleaner database entries
                     let path_to_write = match path_utils::get_relative_path(file_path, canonical_root) {
@@ -252,8 +276,16 @@ impl ScanEngine {
                     
                     None
                 }
-            }
+            };
+            
+            pb.inc(1);
+            result
         }).collect();
+        
+        let duration = start_time.elapsed();
+        
+        // Clear progress bar
+        pb.finish_and_clear();
         
         // Write all results to output file
         let output_file = File::create(output).map_err(|e| {
@@ -278,8 +310,6 @@ impl ScanEngine {
             HashUtilityError::from_io_error(e, "flushing output file", Some(output.to_path_buf()))
         })?;
         
-        let duration = start_time.elapsed();
-        
         // Extract final statistics
         let final_processed = *files_processed.lock().unwrap();
         let final_failed = *files_failed.lock().unwrap();
@@ -289,8 +319,15 @@ impl ScanEngine {
         println!("\nScan complete!");
         println!("Files processed: {}", final_processed);
         println!("Files failed: {}", final_failed);
-        println!("Total bytes: {}", final_bytes);
+        println!("Total bytes: {} ({:.2} MB)", final_bytes, final_bytes as f64 / 1_048_576.0);
         println!("Duration: {:.2}s", duration.as_secs_f64());
+        
+        // Calculate and display throughput
+        if duration.as_secs_f64() > 0.0 {
+            let throughput_mbps = (final_bytes as f64 / 1_048_576.0) / duration.as_secs_f64();
+            println!("Throughput: {:.2} MB/s", throughput_mbps);
+        }
+        
         println!("Output written to: {}", output.display());
         
         Ok(ScanStats {
