@@ -7,6 +7,7 @@ mod database;
 mod path_utils;
 mod error;
 mod ignore_handler;
+mod wildcard;
 
 use cli::{parse_args, Command};
 use hash::{HashComputer, HashRegistry};
@@ -68,7 +69,7 @@ fn main() {
 
 /// Handle the hash command: compute and display hash(es) for a file, text, or stdin
 fn handle_hash_command(
-    file: Option<&std::path::Path>,
+    file_pattern: Option<&str>,
     text: Option<&str>,
     algorithms: &[String],
     output: Option<&std::path::Path>,
@@ -78,20 +79,26 @@ fn handle_hash_command(
     let computer = HashComputer::new();
     
     // Compute hashes for all specified algorithms
-    let results = match (file, text) {
-        (Some(file_path), None) => {
-            // Hash from file
-            if fast {
-                // Use fast mode for each algorithm
-                let mut results = Vec::new();
-                for algorithm in algorithms {
-                    results.push(computer.compute_hash_fast(file_path, algorithm)?);
+    let results = match (file_pattern, text) {
+        (Some(pattern), None) => {
+            // Expand wildcard pattern to get list of files
+            let files = wildcard::expand_pattern(pattern)?;
+            
+            // Hash all matched files
+            let mut all_results = Vec::new();
+            for file_path in files {
+                if fast {
+                    // Use fast mode for each algorithm
+                    for algorithm in algorithms {
+                        all_results.push(computer.compute_hash_fast(&file_path, algorithm)?);
+                    }
+                } else {
+                    // Use normal mode
+                    let file_results = computer.compute_multiple_hashes(&file_path, algorithms)?;
+                    all_results.extend(file_results);
                 }
-                results
-            } else {
-                // Use normal mode
-                computer.compute_multiple_hashes(file_path, algorithms)?
             }
+            all_results
         }
         (None, Some(text_input)) => {
             // Hash from text (fast mode not supported for text)
@@ -176,7 +183,7 @@ fn handle_hash_command(
 
 /// Handle the scan command: scan directory and write database
 fn handle_scan_command(
-    directory: &std::path::Path,
+    directory_pattern: &str,
     algorithm: &str,
     output: &std::path::Path,
     parallel: bool,
@@ -196,12 +203,85 @@ fn handle_scan_command(
         }
     };
     
+    // Expand wildcard pattern to get list of directories
+    let directories = wildcard::expand_pattern(directory_pattern)?;
+    
+    // Verify all matched paths are directories
+    for dir in &directories {
+        if !dir.is_dir() {
+            return Err(HashUtilityError::InvalidArguments {
+                message: format!("Path '{}' is not a directory", dir.display()),
+            });
+        }
+    }
+    
     let engine = ScanEngine::with_parallel(parallel)
         .with_fast_mode(fast)
         .with_format(format);
     
-    // Scan directory and write database
-    let stats = engine.scan_directory(directory, algorithm, output)?;
+    // Scan all matched directories and aggregate stats
+    let mut total_stats = scan::ScanStats {
+        files_processed: 0,
+        files_failed: 0,
+        total_bytes: 0,
+        duration: std::time::Duration::new(0, 0),
+    };
+    
+    // For multiple directories, we need to handle output differently
+    if directories.len() > 1 {
+        // Create the output file first (this will overwrite if it exists)
+        std::fs::File::create(output).map_err(|e| {
+            HashUtilityError::from_io_error(e, "creating output file", Some(output.to_path_buf()))
+        })?;
+        
+        // Scan each directory and append to the output file
+        for (idx, directory) in directories.iter().enumerate() {
+            // For the first directory, use normal mode (create/overwrite)
+            // For subsequent directories, we need to append
+            let temp_output = if idx == 0 {
+                output.to_path_buf()
+            } else {
+                // Create a temporary file for this directory's results
+                let temp_path = output.with_extension(format!("tmp{}", idx));
+                temp_path
+            };
+            
+            let stats = engine.scan_directory(directory, algorithm, &temp_output)?;
+            
+            // If we used a temp file, append its contents to the main output
+            if idx > 0 {
+                let temp_contents = std::fs::read_to_string(&temp_output).map_err(|e| {
+                    HashUtilityError::from_io_error(e, "reading temp file", Some(temp_output.clone()))
+                })?;
+                
+                use std::io::Write;
+                let mut output_file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(output)
+                    .map_err(|e| {
+                        HashUtilityError::from_io_error(e, "opening output file for append", Some(output.to_path_buf()))
+                    })?;
+                
+                output_file.write_all(temp_contents.as_bytes()).map_err(|e| {
+                    HashUtilityError::from_io_error(e, "appending to output file", Some(output.to_path_buf()))
+                })?;
+                
+                // Remove the temp file
+                std::fs::remove_file(&temp_output).ok();
+            }
+            
+            total_stats.files_processed += stats.files_processed;
+            total_stats.files_failed += stats.files_failed;
+            total_stats.total_bytes += stats.total_bytes;
+            total_stats.duration += stats.duration;
+        }
+    } else {
+        // Single directory - use normal scan
+        let stats = engine.scan_directory(&directories[0], algorithm, output)?;
+        total_stats = stats;
+    }
+    
+    let stats = total_stats;
     
     // Compress the database if requested
     let final_output = if compress {
@@ -232,7 +312,8 @@ fn handle_scan_command(
         #[derive(serde::Serialize)]
         struct ScanMetadata {
             timestamp: String,
-            directory: std::path::PathBuf,
+            directory_pattern: String,
+            directories_scanned: Vec<std::path::PathBuf>,
             algorithm: String,
             output_file: std::path::PathBuf,
             parallel: bool,
@@ -244,7 +325,8 @@ fn handle_scan_command(
             stats,
             metadata: ScanMetadata {
                 timestamp: chrono::Utc::now().to_rfc3339(),
-                directory: directory.to_path_buf(),
+                directory_pattern: directory_pattern.to_string(),
+                directories_scanned: directories,
                 algorithm: algorithm.to_string(),
                 output_file: final_output,
                 parallel,
@@ -267,14 +349,73 @@ fn handle_scan_command(
 
 /// Handle the verify command: compare database with directory
 fn handle_verify_command(
-    database: &std::path::Path,
-    directory: &std::path::Path,
+    database_pattern: &str,
+    directory_pattern: &str,
     json: bool,
 ) -> Result<(), HashUtilityError> {
     let engine = VerifyEngine::new();
     
-    // Run verification
-    let report = engine.verify(database, directory)?;
+    // Expand wildcard patterns
+    let databases = wildcard::expand_pattern(database_pattern)?;
+    let directories = wildcard::expand_pattern(directory_pattern)?;
+    
+    // Verify all matched paths are valid
+    for db in &databases {
+        if !db.is_file() {
+            return Err(HashUtilityError::InvalidArguments {
+                message: format!("Database path '{}' is not a file", db.display()),
+            });
+        }
+    }
+    
+    for dir in &directories {
+        if !dir.is_dir() {
+            return Err(HashUtilityError::InvalidArguments {
+                message: format!("Path '{}' is not a directory", dir.display()),
+            });
+        }
+    }
+    
+    // Run verification for all combinations of databases and directories
+    let mut all_reports = Vec::new();
+    
+    for database in &databases {
+        for directory in &directories {
+            let report = engine.verify(database, directory)?;
+            all_reports.push((database.clone(), directory.clone(), report));
+        }
+    }
+    
+    // Aggregate results if multiple verifications were performed
+    let (database, directory, report) = if all_reports.len() == 1 {
+        // Single verification - use the report as-is
+        let (db, dir, rep) = all_reports.into_iter().next().unwrap();
+        (db, dir, rep)
+    } else {
+        // Multiple verifications - aggregate the reports
+        let mut aggregated_report = verify::VerifyReport {
+            matches: 0,
+            mismatches: Vec::new(),
+            missing_files: Vec::new(),
+            new_files: Vec::new(),
+        };
+        
+        for (db, dir, report) in &all_reports {
+            println!("\n=== Verification: {} against {} ===", db.display(), dir.display());
+            report.display();
+            
+            aggregated_report.matches += report.matches;
+            aggregated_report.mismatches.extend(report.mismatches.clone());
+            aggregated_report.missing_files.extend(report.missing_files.clone());
+            aggregated_report.new_files.extend(report.new_files.clone());
+        }
+        
+        // Use the first database and directory for metadata
+        let (first_db, first_dir, _) = all_reports.into_iter().next().unwrap();
+        (first_db, first_dir, aggregated_report)
+    };
+    
+    let report = report;
     
     // Output results based on format
     if json {
@@ -287,16 +428,20 @@ fn handle_verify_command(
         #[derive(serde::Serialize)]
         struct VerifyMetadata {
             timestamp: String,
-            database: std::path::PathBuf,
-            directory: std::path::PathBuf,
+            database_pattern: String,
+            directory_pattern: String,
+            databases_verified: Vec<std::path::PathBuf>,
+            directories_verified: Vec<std::path::PathBuf>,
         }
         
         let output = VerifyOutput {
             report,
             metadata: VerifyMetadata {
                 timestamp: chrono::Utc::now().to_rfc3339(),
-                database: database.to_path_buf(),
-                directory: directory.to_path_buf(),
+                database_pattern: database_pattern.to_string(),
+                directory_pattern: directory_pattern.to_string(),
+                databases_verified: databases,
+                directories_verified: directories,
             },
         };
         

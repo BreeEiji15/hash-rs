@@ -369,8 +369,40 @@
     - Verify that compression reduces file size
     - _Requirements: 2.2_
 
-- [ ] 25. Final integration and testing
-  - [ ] 25.1 Integration testing for new features
+- [x] 25. Add wildcard pattern support
+  - [x] 25.1 Add glob dependency
+    - Add glob crate to Cargo.toml for cross-platform wildcard expansion
+    - _Requirements: 1.1, 2.1_
+  
+  - [x] 25.2 Implement wildcard expansion in hash command
+    - Detect wildcard patterns in file arguments (*, ?, [])
+    - Expand patterns using glob crate to match files
+    - Support patterns like `img202405*.jpg`, `file?.txt`, `[abc]*.bin`
+    - Handle no matches gracefully with error message
+    - Process all matched files in order
+    - _Requirements: 1.1_
+  
+  - [x] 25.3 Implement wildcard expansion in scan command
+    - Support directory patterns with wildcards
+    - Allow patterns like `data/*/hashes` to scan multiple directories
+    - Expand patterns before scanning
+    - _Requirements: 2.1_
+  
+  - [x] 25.4 Implement wildcard expansion in verify command
+    - Support wildcard patterns for database file argument
+    - Support wildcard patterns for directory argument
+    - Allow verification against multiple databases: `verify *.db data/`
+    - _Requirements: 3.1_
+  
+  - [ ]* 25.5 Write property test for wildcard expansion
+    - **Property: Wildcard pattern matching**
+    - Verify that wildcard patterns correctly match files
+    - Verify that all matched files are processed
+    - Verify that no unmatched files are included
+    - _Requirements: 1.1, 2.1_
+
+- [ ] 26. Final integration and testing
+  - [ ] 26.1 Integration testing for new features
     - Test stdin hashing with various inputs
     - Test text hashing with special characters
     - Test HMAC with different keys
@@ -378,24 +410,25 @@
     - Test hashdeep format compatibility
     - Test JSON output parsing
     - Test database compression
+    - Test wildcard patterns with various glob expressions
     - _Requirements: 1.1, 2.1, 2.2, 9.1_
   
-  - [x] 25.2 Update documentation
+  - [x] 26.2 Update documentation
     - Add examples for all new features to README
     - Document .hashignore syntax and behavior
     - Document hashdeep format compatibility
     - Document JSON output schema
     - _Requirements: 6.1, 6.2_
 
-- [x] 26. Set up GitHub Actions CI/CD pipeline
-  - [x] 26.1 Create GitHub Actions workflow for multi-platform builds
+- [x] 27. Set up GitHub Actions CI/CD pipeline
+  - [x] 27.1 Create GitHub Actions workflow for multi-platform builds
     - Create `.github/workflows/release.yml` workflow file
     - Configure matrix builds for: Windows (x86_64, arm), macOS (x86_64, aarch64), Linux (x86_64, arm), FreeBSD (x86_64, arm)
     - Set up Rust toolchain installation for each platform
     - Configure cross-compilation where needed
     - _Requirements: 5.2, 5.3_
   
-  - [x] 26.2 Implement build and release steps
+  - [x] 27.2 Implement build and release steps
     - Build optimized release binaries for each platform
     - Strip binaries and create compressed archives (tar.gz for Unix, zip for Windows)
     - Configure manual trigger from Git tags (e.g., `v*` pattern)
@@ -403,7 +436,7 @@
     - Generate checksums (SHA256) for all release artifacts
     - _Requirements: 5.2, 5.3_
   
-  - [ ]* 26.3 Add automated testing in CI pipeline
+  - [ ]* 27.3 Add automated testing in CI pipeline
     - Run `cargo test` on all platforms before building release
     - Run `cargo clippy` for linting
     - Ensure all tests pass before creating release artifacts

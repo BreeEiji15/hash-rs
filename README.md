@@ -8,6 +8,7 @@ High-performance cryptographic hash utility with SIMD optimization.
 - **SIMD**: Automatic hardware acceleration (SSE, AVX, AVX2, AVX-512, NEON)
 - **Fast Mode**: Quick hashing for large files (samples 300MB)
 - **Flexible Input**: Files, stdin, or text strings
+- **Wildcard Patterns**: Support for `*`, `?`, and `[...]` patterns in file/directory arguments
 - **Directory Scanning**: Recursive hashing with parallel processing
 - **Verification**: Compare hashes against stored database
 - **.hashignore**: Exclude files using gitignore patterns
@@ -51,6 +52,24 @@ hash myfile.txt -a sha256 -o output.txt      # Save to file
 hash myfile.txt -a sha256 --json             # JSON output
 ```
 
+### Wildcard Patterns
+
+Hash multiple files using wildcard patterns:
+
+```bash
+hash "*.txt" -a sha256                       # All .txt files
+hash "file?.bin" -a sha256                   # file1.bin, fileA.bin, etc.
+hash "[abc]*.jpg" -a sha256                  # Files starting with a, b, or c
+hash "img202405*.jpg" -a sha256              # All images from May 2024
+```
+
+Patterns work with all commands:
+
+```bash
+hash scan -d "data/*/hashes" -a sha256 -o output.db    # Multiple directories
+hash verify -b "*.db" -d "data/*" --json               # Multiple databases/dirs
+```
+
 ### Hash Text or Stdin
 
 ```bash
@@ -92,13 +111,13 @@ hash list --json                  # JSON output
 
 | Command | Option | Description |
 |---------|--------|-------------|
-| | `FILE` | File to hash (omit for stdin) |
+| | `FILE` | File or wildcard pattern to hash (omit for stdin) |
 | | `-t, --text <TEXT>` | Hash text string |
 | | `-a, --algorithm <ALG>` | Algorithm (default: sha256) |
 | | `-o, --output <FILE>` | Write to file |
 | | `-f, --fast` | Fast mode (samples 300MB) |
 | | `--json` | JSON output |
-| scan | `-d, --directory <DIR>` | Directory to scan |
+| scan | `-d, --directory <DIR>` | Directory or wildcard pattern to scan |
 | | `-a, --algorithm <ALG>` | Algorithm (default: sha256) |
 | | `-o, --output <FILE>` | Output database |
 | | `-p, --parallel` | Parallel processing |
@@ -106,8 +125,8 @@ hash list --json                  # JSON output
 | | `--format <FMT>` | standard or hashdeep |
 | | `--compress` | LZMA compression |
 | | `--json` | JSON output |
-| verify | `-b, --database <FILE>` | Database file |
-| | `-d, --directory <DIR>` | Directory to verify |
+| verify | `-b, --database <FILE>` | Database file or wildcard pattern |
+| | `-d, --directory <DIR>` | Directory or wildcard pattern to verify |
 | | `--json` | JSON output |
 | benchmark | `-s, --size <MB>` | Data size (default: 100) |
 | | `--json` | JSON output |
@@ -216,6 +235,29 @@ Verify: `cargo test --release --test simd_verification -- --nocapture`
 
 See [SIMD_OPTIMIZATION.md](SIMD_OPTIMIZATION.md) for details.
 
+## Wildcard Patterns
+
+Supported patterns:
+- `*` - Matches any number of characters (e.g., `*.txt`, `file*`)
+- `?` - Matches exactly one character (e.g., `file?.bin`)
+- `[...]` - Matches any character in brackets (e.g., `[abc]*.jpg`)
+
+**Examples:**
+```bash
+hash "*.txt" -a sha256                       # All .txt files in current dir
+hash "data/*.bin" -a sha256                  # All .bin files in data/
+hash "file?.txt" -a sha256                   # file1.txt, fileA.txt, etc.
+hash "[abc]*.jpg" -a sha256                  # Files starting with a, b, or c
+hash scan -d "backup/*/data" -a sha256 -o db.txt  # Multiple directories
+hash verify -b "*.db" -d "data/*"            # All .db files against all data dirs
+```
+
+**Notes:**
+- Patterns are expanded by the shell or the application
+- If no files match, an error is displayed
+- Multiple matches are processed in sorted order
+- For scan/verify with multiple directories, results are aggregated
+
 ## Troubleshooting
 
 | Issue | Solution |
@@ -225,3 +267,5 @@ See [SIMD_OPTIMIZATION.md](SIMD_OPTIMIZATION.md) for details.
 | Slow performance | Use `-p` for parallel, `-f` for fast mode, or BLAKE3 |
 | Fast mode not working | Fast mode only works with files (not stdin/text) |
 | .hashignore not working | Check file location: `/path/to/dir/.hashignore` |
+| Wildcard pattern not matching | Ensure pattern is quoted (e.g., `"*.txt"` not `*.txt`) |
+| No files match pattern | Check pattern syntax and file locations |

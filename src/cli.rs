@@ -29,9 +29,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
     
-    /// File to hash (if omitted, reads from stdin for piping)
+    /// File or wildcard pattern to hash (e.g., *.txt, file?.bin, [abc]*.jpg)
+    /// If omitted, reads from stdin for piping
     #[arg(value_name = "FILE")]
-    pub file: Option<PathBuf>,
+    pub file: Option<String>,
     
     /// Hash text string directly instead of a file (e.g., --text "hello world")
     #[arg(short = 't', long = "text", value_name = "TEXT", conflicts_with = "file")]
@@ -62,9 +63,9 @@ pub enum Command {
     /// Recursively scans a directory and computes hashes for all files,
     /// storing the results in a plain text database file.
     Scan {
-        /// Directory to scan recursively for files
+        /// Directory or wildcard pattern to scan recursively (e.g., data/*/hashes)
         #[arg(short = 'd', long = "directory", value_name = "DIR")]
-        directory: PathBuf,
+        directory: String,
         
         /// Hash algorithm to use (use 'hash list' to see all available algorithms)
         #[arg(short = 'a', long = "algorithm", value_name = "ALGORITHM", default_value = "sha256")]
@@ -100,13 +101,14 @@ pub enum Command {
     /// Compares current file hashes against a stored database to detect
     /// modifications, deletions, and new files.
     Verify {
-        /// Hash database file to compare against (supports standard, hashdeep, and compressed .xz formats)
+        /// Hash database file or wildcard pattern (e.g., *.db, hashes?.txt)
+        /// Supports standard, hashdeep, and compressed .xz formats
         #[arg(short = 'b', long = "database", value_name = "FILE")]
-        database: PathBuf,
+        database: String,
         
-        /// Directory to verify against the database (checks for modifications, deletions, and new files)
+        /// Directory or wildcard pattern to verify (e.g., data/*, dir?)
         #[arg(short = 'd', long = "directory", value_name = "DIR")]
-        directory: PathBuf,
+        directory: String,
         
         /// Output verification report as JSON instead of plain text
         #[arg(long = "json")]
@@ -179,7 +181,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256"]);
         assert_eq!(cli.output, None);
         assert_eq!(cli.fast, false);
@@ -192,7 +194,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256", "md5"]);
         assert_eq!(cli.output, None);
         assert_eq!(cli.fast, false);
@@ -204,7 +206,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256"]);
         assert_eq!(cli.output, Some(PathBuf::from("output.txt")));
         assert_eq!(cli.fast, false);
@@ -216,7 +218,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256"]);
         assert_eq!(cli.fast, false);
     }
@@ -227,7 +229,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256"]);
         assert_eq!(cli.output, None);
         assert_eq!(cli.fast, true);
@@ -239,7 +241,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256"]); // default
         assert_eq!(cli.output, None);
         assert_eq!(cli.fast, true);
@@ -251,7 +253,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("test.txt")));
+        assert_eq!(cli.file, Some("test.txt".to_string()));
         assert_eq!(cli.algorithms, vec!["sha256", "md5"]);
         assert_eq!(cli.output, None);
         assert_eq!(cli.fast, true);
@@ -264,7 +266,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, false);
@@ -284,7 +286,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
@@ -304,7 +306,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
@@ -324,8 +326,8 @@ mod tests {
         
         match cli.command {
             Some(Command::Verify { database, directory, json }) => {
-                assert_eq!(database, PathBuf::from("hashes.txt"));
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(database, "hashes.txt");
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(json, false);
             }
             _ => panic!("Expected Verify command"),
@@ -339,8 +341,8 @@ mod tests {
         
         match cli.command {
             Some(Command::Verify { database, directory, json }) => {
-                assert_eq!(database, PathBuf::from("hashes.txt"));
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(database, "hashes.txt");
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(json, false);
             }
             _ => panic!("Expected Verify command"),
@@ -418,7 +420,7 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         assert_eq!(cli.command, None);
-        assert_eq!(cli.file, Some(PathBuf::from("myfile.txt")));
+        assert_eq!(cli.file, Some("myfile.txt".to_string()));
     }
     
     #[test]
@@ -511,7 +513,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, false);
@@ -531,7 +533,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, false);
@@ -551,7 +553,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
@@ -619,7 +621,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, false);
@@ -639,7 +641,7 @@ mod tests {
         
         match cli.command {
             Some(Command::Scan { directory, algorithm, output, parallel, fast, format, json, compress }) => {
-                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(directory, "/path/to/dir");
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
