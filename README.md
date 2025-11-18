@@ -98,6 +98,25 @@ hash verify -b hashes.db -d /path/to/dir --json       # JSON
 
 Output shows: Matches, Mismatches, Missing files, New files
 
+### Compare Databases
+
+Compare two hash databases to identify changes, duplicates, and differences:
+
+```bash
+hash compare db1.txt db2.txt                          # Compare two databases
+hash compare db1.txt db2.txt -o report.txt            # Save report to file
+hash compare db1.txt db2.txt --format json            # JSON output
+hash compare db1.txt.xz db2.txt.xz                    # Compare compressed databases
+hash compare db1.txt db2.txt.xz                       # Mix compressed and plain
+```
+
+Output shows:
+- **Unchanged**: Files with same hash in both databases
+- **Changed**: Files with different hashes
+- **Removed**: Files in DB1 but not DB2
+- **Added**: Files in DB2 but not DB1
+- **Duplicates**: Files with same hash within each database
+
 ### Benchmark & List
 
 ```bash
@@ -128,6 +147,10 @@ hash list --json                  # JSON output
 | verify | `-b, --database <FILE>` | Database file or wildcard pattern |
 | | `-d, --directory <DIR>` | Directory or wildcard pattern to verify |
 | | `--json` | JSON output |
+| compare | `DATABASE1` | First database file (supports .xz) |
+| | `DATABASE2` | Second database file (supports .xz) |
+| | `-o, --output <FILE>` | Write report to file |
+| | `--format <FMT>` | plain-text, json, or hashdeep |
 | benchmark | `-s, --size <MB>` | Data size (default: 100) |
 | | `--json` | JSON output |
 
@@ -202,6 +225,16 @@ hash verify -b backup.db -d /data
 hash scan -d /etc/config -a sha256 -o baseline.db
 hash verify -b baseline.db -d /etc/config
 
+# Compare two snapshots
+hash scan -d /data -a sha256 -o snapshot1.db
+# ... time passes ...
+hash scan -d /data -a sha256 -o snapshot2.db
+hash compare snapshot1.db snapshot2.db -o changes.txt
+
+# Find duplicates
+hash scan -d /media -a sha256 -o media.db
+hash compare media.db media.db                    # Compare with itself
+
 # Forensic analysis
 hash scan -d /evidence -a sha3-256 -o evidence.db
 hash scan -d /evidence -a sha256 -o evidence.txt --format hashdeep
@@ -212,6 +245,7 @@ hash scan -d /backups -a blake3 -o checksums.db -p -f
 
 # Automation
 hash verify -b hashes.db -d /data --json | jq '.report.mismatches'
+hash compare db1.db db2.db --format json | jq '.summary'
 ```
 
 ## Algorithm Selection
