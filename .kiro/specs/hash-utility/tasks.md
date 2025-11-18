@@ -144,28 +144,56 @@
     - **Property 9: Parallel processing equivalence**
     - **Validates: Requirements 8.4**
 
-- [-] 12. Implement error handling
+- [x] 12. Implement error handling
   - [x] 12.1 Define error types
     - Create HashError enum with variants for all error categories
     - Implement Display trait for user-friendly error messages
     - Add context to errors (file paths, operations)
     - _Requirements: 6.3_
   
-  - [ ] 12.2 Add error handling throughout codebase
+  - [x] 12.2 Add error handling throughout codebase
     - Use Result types consistently
     - Provide helpful error messages with suggestions
     - Log errors during directory scans without stopping
     - _Requirements: 2.4, 6.3_
 
-- [ ] 13. Add SIMD optimization verification
-  - [ ] 13.1 Verify SIMD support in hash crates
-    - Test that BLAKE3 uses SIMD when available
+- [x] 13. Add SIMD optimization verification
+  - [x] 13.1 Verify SIMD support in hash crates
+    - Test that ALL hashes uses SIMD when available
     - Verify fallback to scalar implementations works
     - Document RUSTFLAGS for optimal compilation
     - _Requirements: 1.3, 4.4, 4.5_
 
-- [ ] 14. Final integration and testing
-  - [ ] 14.2 Create usage examples and documentation
+- [-] 14. Implement fast mode for large file hashing
+  - [ ] 14.1 Add fast mode flag to CLI
+    - Add `--fast` or `-F` flag to scan command
+    - Update help text to explain fast mode behavior
+    - _Requirements: 1.1, 2.1_
+  
+  - [ ] 14.2 Implement fast hash computation strategy
+    - Create FastHashComputer that samples three regions of file
+    - Read first 100MB of file
+    - Read last 100MB of file
+    - Read middle 100MB of file (calculated as: file_size/2 - 50MB to file_size/2 + 50MB)
+    - Concatenate the three samples and compute hash on combined data
+    - Ensure deterministic middle calculation so same file always produces same hash
+    - Handle files smaller than 300MB gracefully (use full file)
+    - _Requirements: 1.1, 1.4, 1.5_
+  
+  - [ ]* 14.3 Write property test for fast mode consistency
+    - **Property: Fast mode determinism**
+    - Verify that hashing the same file twice with fast mode produces identical results
+    - Verify that middle region calculation is consistent across multiple runs
+    - _Requirements: 1.1_
+  
+  - [ ]* 14.4 Write property test for fast mode correctness
+    - **Property: Fast mode sampling correctness**
+    - Verify that fast mode correctly samples first, middle, and last regions
+    - Verify that files smaller than 300MB are handled correctly
+    - _Requirements: 1.4, 1.5_
+
+- [x] 15. Final integration and testing
+  - [x] 15.2 Create usage examples and documentation
     - Add README with installation instructions
     - Document all commands with examples
     - _Requirements: 6.1, 6.2_

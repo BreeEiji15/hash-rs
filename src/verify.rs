@@ -223,8 +223,12 @@ impl VerifyEngine {
         directory: &Path,
         files: &mut HashSet<PathBuf>,
     ) -> Result<(), VerifyError> {
-        for entry in fs::read_dir(directory)? {
-            let entry = entry?;
+        for entry in fs::read_dir(directory).map_err(|e| {
+            HashUtilityError::from_io_error(e, "reading directory", Some(directory.to_path_buf()))
+        })? {
+            let entry = entry.map_err(|e| {
+                HashUtilityError::from_io_error(e, "reading directory entry", Some(directory.to_path_buf()))
+            })?;
             let path = entry.path();
             
             if path.is_file() {

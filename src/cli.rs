@@ -10,15 +10,15 @@ use crate::error::HashUtilityError;
 /// A cross-platform console application for computing cryptographic hashes,
 /// scanning directories, and verifying file integrity.
 #[derive(Parser, Debug)]
-#[command(name = "hash-utility")]
+#[command(name = "hash")]
 #[command(version = "0.1.0")]
 #[command(about = "Cryptographic hash computation and verification tool", long_about = None)]
 #[command(after_help = "EXAMPLES:\n  \
-    hash-utility hash -f file.txt -a sha256\n  \
-    hash-utility scan -d /path/to/dir -a sha256 -o hashes.txt\n  \
-    hash-utility verify -b hashes.txt -d /path/to/dir\n  \
-    hash-utility benchmark\n  \
-    hash-utility list")]
+    hash hash -f file.txt -a sha256\n  \
+    hash scan -d /path/to/dir -a sha256 -o hashes.txt\n  \
+    hash verify -b hashes.txt -d /path/to/dir\n  \
+    hash benchmark\n  \
+    hash list")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -108,9 +108,21 @@ pub enum Command {
 pub fn parse_args() -> Result<Cli, HashUtilityError> {
     match Cli::try_parse() {
         Ok(cli) => Ok(cli),
-        Err(e) => Err(HashUtilityError::InvalidArguments {
-            message: e.to_string(),
-        }),
+        Err(e) => {
+            // Check if this is a help or version request (which clap treats as "errors")
+            // These should be printed and exit successfully
+            if e.kind() == clap::error::ErrorKind::DisplayHelp 
+                || e.kind() == clap::error::ErrorKind::DisplayVersion {
+                // Print the help/version message and exit successfully
+                print!("{}", e);
+                std::process::exit(0);
+            }
+            
+            // For actual errors, return our custom error type
+            Err(HashUtilityError::InvalidArguments {
+                message: e.to_string(),
+            })
+        }
     }
 }
 
@@ -123,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_parse_hash_command() {
-        let args = vec!["hash-utility", "hash", "-f", "test.txt", "-a", "sha256"];
+        let args = vec!["hash", "hash", "-f", "test.txt", "-a", "sha256"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -138,7 +150,7 @@ mod tests {
     
     #[test]
     fn test_parse_hash_command_multiple_algorithms() {
-        let args = vec!["hash-utility", "hash", "-f", "test.txt", "-a", "sha256", "-a", "md5"];
+        let args = vec!["hash", "hash", "-f", "test.txt", "-a", "sha256", "-a", "md5"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -153,7 +165,7 @@ mod tests {
     
     #[test]
     fn test_parse_hash_command_with_output() {
-        let args = vec!["hash-utility", "hash", "-f", "test.txt", "-a", "sha256", "-o", "output.txt"];
+        let args = vec!["hash", "hash", "-f", "test.txt", "-a", "sha256", "-o", "output.txt"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -168,7 +180,7 @@ mod tests {
     
     #[test]
     fn test_parse_hash_command_long_flags() {
-        let args = vec!["hash-utility", "hash", "--file", "test.txt", "--algorithm", "sha256"];
+        let args = vec!["hash", "hash", "--file", "test.txt", "--algorithm", "sha256"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -182,7 +194,7 @@ mod tests {
     
     #[test]
     fn test_parse_scan_command() {
-        let args = vec!["hash-utility", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt"];
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -198,7 +210,7 @@ mod tests {
     
     #[test]
     fn test_parse_scan_command_with_parallel() {
-        let args = vec!["hash-utility", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt", "-p"];
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt", "-p"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -214,7 +226,7 @@ mod tests {
     
     #[test]
     fn test_parse_scan_command_long_flags() {
-        let args = vec!["hash-utility", "scan", "--directory", "/path/to/dir", "--algorithm", "sha256", "--output", "hashes.txt", "--parallel"];
+        let args = vec!["hash", "scan", "--directory", "/path/to/dir", "--algorithm", "sha256", "--output", "hashes.txt", "--parallel"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -230,7 +242,7 @@ mod tests {
     
     #[test]
     fn test_parse_verify_command() {
-        let args = vec!["hash-utility", "verify", "-b", "hashes.txt", "-d", "/path/to/dir"];
+        let args = vec!["hash", "verify", "-b", "hashes.txt", "-d", "/path/to/dir"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -244,7 +256,7 @@ mod tests {
     
     #[test]
     fn test_parse_verify_command_long_flags() {
-        let args = vec!["hash-utility", "verify", "--database", "hashes.txt", "--directory", "/path/to/dir"];
+        let args = vec!["hash", "verify", "--database", "hashes.txt", "--directory", "/path/to/dir"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -258,7 +270,7 @@ mod tests {
     
     #[test]
     fn test_parse_benchmark_command() {
-        let args = vec!["hash-utility", "benchmark"];
+        let args = vec!["hash", "benchmark"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -271,7 +283,7 @@ mod tests {
     
     #[test]
     fn test_parse_benchmark_command_with_size() {
-        let args = vec!["hash-utility", "benchmark", "-s", "50"];
+        let args = vec!["hash", "benchmark", "-s", "50"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -284,7 +296,7 @@ mod tests {
     
     #[test]
     fn test_parse_benchmark_command_long_flag() {
-        let args = vec!["hash-utility", "benchmark", "--size", "200"];
+        let args = vec!["hash", "benchmark", "--size", "200"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -297,7 +309,7 @@ mod tests {
     
     #[test]
     fn test_parse_list_command() {
-        let args = vec!["hash-utility", "list"];
+        let args = vec!["hash", "list"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -310,7 +322,7 @@ mod tests {
     
     #[test]
     fn test_parse_invalid_command() {
-        let args = vec!["hash-utility", "invalid-command"];
+        let args = vec!["hash", "invalid-command"];
         let result = Cli::try_parse_from(args);
         
         assert!(result.is_err());
@@ -319,7 +331,7 @@ mod tests {
     #[test]
     fn test_parse_missing_required_argument() {
         // Hash command requires -f flag
-        let args = vec!["hash-utility", "hash"];
+        let args = vec!["hash", "hash"];
         let result = Cli::try_parse_from(args);
         
         assert!(result.is_err());
@@ -328,7 +340,7 @@ mod tests {
     #[test]
     fn test_parse_scan_missing_output() {
         // Scan command requires -o flag
-        let args = vec!["hash-utility", "scan", "-d", "/path/to/dir", "-a", "sha256"];
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256"];
         let result = Cli::try_parse_from(args);
         
         assert!(result.is_err());
@@ -337,7 +349,7 @@ mod tests {
     #[test]
     fn test_parse_verify_missing_database() {
         // Verify command requires -b flag
-        let args = vec!["hash-utility", "verify", "-d", "/path/to/dir"];
+        let args = vec!["hash", "verify", "-d", "/path/to/dir"];
         let result = Cli::try_parse_from(args);
         
         assert!(result.is_err());
@@ -345,7 +357,7 @@ mod tests {
     
     #[test]
     fn test_hash_command_default_algorithm() {
-        let args = vec!["hash-utility", "hash", "-f", "test.txt"];
+        let args = vec!["hash", "hash", "-f", "test.txt"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
@@ -358,7 +370,7 @@ mod tests {
     
     #[test]
     fn test_scan_command_default_algorithm() {
-        let args = vec!["hash-utility", "scan", "-d", "/path/to/dir", "-o", "hashes.txt"];
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-o", "hashes.txt"];
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {

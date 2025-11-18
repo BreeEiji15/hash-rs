@@ -91,7 +91,9 @@ impl ScanEngine {
         start_time: Instant,
     ) -> Result<ScanStats, ScanError> {
         // Open output file for writing
-        let output_file = File::create(output)?;
+        let output_file = File::create(output).map_err(|e| {
+            HashUtilityError::from_io_error(e, "creating output file", Some(output.to_path_buf()))
+        })?;
         let mut writer = BufWriter::new(output_file);
         
         // Track statistics
@@ -224,7 +226,9 @@ impl ScanEngine {
         }).collect();
         
         // Write all results to output file
-        let output_file = File::create(output)?;
+        let output_file = File::create(output).map_err(|e| {
+            HashUtilityError::from_io_error(e, "creating output file", Some(output.to_path_buf()))
+        })?;
         let mut writer = BufWriter::new(output_file);
         
         for result in results.iter().flatten() {
@@ -238,7 +242,9 @@ impl ScanEngine {
         }
         
         // Flush the writer to ensure all data is written
-        writer.flush()?;
+        writer.flush().map_err(|e| {
+            HashUtilityError::from_io_error(e, "flushing output file", Some(output.to_path_buf()))
+        })?;
         
         let duration = start_time.elapsed();
         
