@@ -20,7 +20,7 @@ use crate::error::HashUtilityError;
     cat file.txt | hash -a sha256\n  \
     hash scan -d /path/to/dir -a sha256 -o hashes.txt\n  \
     hash scan -d /path/to/dir -o hashes.txt --format hashdeep  # hashdeep format\n  \
-    hash scan -d /path/to/dir -o hashes.txt.xz --compress   # compressed output\n  \
+    hash scan -d /path/to/dir -o hashes.txt --compress   # compressed output\n  \
     hash scan -d /path/to/dir -o hashes.txt --json          # JSON output\n  \
     hash verify -b hashes.txt -d /path/to/dir\n  \
     hash benchmark\n  \
