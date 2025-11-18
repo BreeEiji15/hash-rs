@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::database::DatabaseHandler;
+use crate::database::{DatabaseHandler, DatabaseEntry};
 use crate::hash::HashComputer;
 use crate::path_utils;
 use crate::error::HashUtilityError;
@@ -114,9 +114,6 @@ impl VerifyEngine {
         // Load the hash database
         let database = DatabaseHandler::read_database(database_path)?;
         
-        // Extract algorithm from first hash in database (all should use same algorithm)
-        let algorithm = self.detect_algorithm(&database)?;
-        
         // Get canonical path of database file to exclude it from scan
         let database_canonical = database_path.canonicalize().ok();
         
@@ -136,19 +133,25 @@ impl VerifyEngine {
         let mut checked_files = HashSet::new();
         
         // Check each file in the database
-        for (db_path, expected_hash) in &database_canonical {
+        for (db_path, entry) in &database_canonical {
             checked_files.insert(db_path.clone());
             
             if current_files.contains(db_path) {
-                // File exists, compute current hash
-                match self.computer.compute_hash(db_path, &algorithm) {
+                // File exists, compute current hash using the mode specified in the database
+                let hash_result = if entry.fast_mode {
+                    self.computer.compute_hash_fast(db_path, &entry.algorithm)
+                } else {
+                    self.computer.compute_hash(db_path, &entry.algorithm)
+                };
+                
+                match hash_result {
                     Ok(result) => {
-                        if result.hash == *expected_hash {
+                        if result.hash == entry.hash {
                             matches += 1;
                         } else {
                             mismatches.push(Mismatch {
                                 path: db_path.clone(),
-                                expected: expected_hash.clone(),
+                                expected: entry.hash.clone(),
                                 actual: result.hash,
                             });
                         }
@@ -176,38 +179,6 @@ impl VerifyEngine {
             missing_files,
             new_files,
         })
-    }
-    
-    /// Detect the hash algorithm used in the database based on hash length
-    fn detect_algorithm(&self, database: &HashMap<PathBuf, String>) -> Result<String, VerifyError> {
-        if database.is_empty() {
-            return Err(HashUtilityError::EmptyDatabase {
-                path: PathBuf::from("database"),
-            });
-        }
-        
-        // Get first hash to determine algorithm
-        let first_hash = database.values().next().unwrap();
-        let hash_len = first_hash.len();
-        
-        // Map hash length to algorithm (in hex characters)
-        let algorithm = match hash_len {
-            32 => "md5",           // 128 bits = 32 hex chars
-            40 => "sha1",          // 160 bits = 40 hex chars
-            56 => "sha224",        // 224 bits = 56 hex chars
-            64 => "sha256",        // 256 bits = 64 hex chars (also SHA3-256, BLAKE2s, BLAKE3)
-            96 => "sha384",        // 384 bits = 96 hex chars
-            128 => "sha512",       // 512 bits = 128 hex chars (also SHA3-512, BLAKE2b)
-            _ => {
-                return Err(HashUtilityError::DatabaseParseError {
-                    path: PathBuf::from("database"),
-                    line: 1,
-                    reason: format!("Unknown hash length: {} characters", hash_len),
-                });
-            }
-        };
-        
-        Ok(algorithm.to_string())
     }
     
     /// Recursively collect all files in a directory (returns canonical paths)
@@ -254,12 +225,12 @@ impl VerifyEngine {
     /// Uses path_utils for proper cross-platform path handling
     fn resolve_database_paths(
         &self,
-        database: &HashMap<PathBuf, String>,
+        database: &HashMap<PathBuf, DatabaseEntry>,
         base_directory: &Path,
-    ) -> Result<HashMap<PathBuf, String>, VerifyError> {
+    ) -> Result<HashMap<PathBuf, DatabaseEntry>, VerifyError> {
         let mut resolved = HashMap::new();
         
-        for (path, hash) in database {
+        for (path, entry) in database {
             // Use path_utils to resolve the path properly
             let absolute_path = path_utils::resolve_path(path, base_directory);
             
@@ -269,7 +240,7 @@ impl VerifyEngine {
                 Err(_) => absolute_path,
             };
             
-            resolved.insert(final_path, hash.clone());
+            resolved.insert(final_path, entry.clone());
         }
         
         Ok(resolved)
@@ -309,8 +280,8 @@ mod tests {
         // Create database with correct hashes (SHA-256)
         let db_path = format!("{}/database.txt", test_dir);
         let mut db_file = fs::File::create(&db_path).unwrap();
-        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  file1.txt").unwrap();
-        writeln!(db_file, "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7  file2.txt").unwrap();
+        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  sha256  normal  file1.txt").unwrap();
+        writeln!(db_file, "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7  sha256  normal  file2.txt").unwrap();
         
         // Run verification
         let engine = VerifyEngine::new();
@@ -338,7 +309,7 @@ mod tests {
         // Create database with old hash
         let db_path = format!("{}/database.txt", test_dir);
         let mut db_file = fs::File::create(&db_path).unwrap();
-        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  file1.txt").unwrap();
+        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  sha256  normal  file1.txt").unwrap();
         
         // Run verification
         let engine = VerifyEngine::new();
@@ -368,7 +339,7 @@ mod tests {
         // Create database with file that doesn't exist
         let db_path = format!("{}/database.txt", test_dir);
         let mut db_file = fs::File::create(&db_path).unwrap();
-        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  missing_file.txt").unwrap();
+        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  sha256  normal  missing_file.txt").unwrap();
         
         // Run verification
         let engine = VerifyEngine::new();
@@ -396,7 +367,7 @@ mod tests {
         // Create empty database
         let db_path = format!("{}/database.txt", test_dir);
         let mut db_file = fs::File::create(&db_path).unwrap();
-        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  dummy.txt").unwrap();
+        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  sha256  normal  dummy.txt").unwrap();
         
         // Run verification
         let engine = VerifyEngine::new();
@@ -427,11 +398,11 @@ mod tests {
         let db_path = format!("{}/database.txt", test_dir);
         let mut db_file = fs::File::create(&db_path).unwrap();
         // match.txt - correct hash
-        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  match.txt").unwrap();
+        writeln!(db_file, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  sha256  normal  match.txt").unwrap();
         // mismatch.txt - wrong hash
-        writeln!(db_file, "0000000000000000000000000000000000000000000000000000000000000000  mismatch.txt").unwrap();
+        writeln!(db_file, "0000000000000000000000000000000000000000000000000000000000000000  sha256  normal  mismatch.txt").unwrap();
         // missing.txt - file doesn't exist
-        writeln!(db_file, "1111111111111111111111111111111111111111111111111111111111111111  missing.txt").unwrap();
+        writeln!(db_file, "1111111111111111111111111111111111111111111111111111111111111111  sha256  normal  missing.txt").unwrap();
         // new.txt is not in database
         
         // Run verification
@@ -467,7 +438,7 @@ mod tests {
     fn test_verify_directory_not_found() {
         // Create a temporary database file
         let db_path = "test_db_temp.txt";
-        fs::write(db_path, "abc123  file.txt\n").unwrap();
+        fs::write(db_path, "abc123  sha256  normal  file.txt\n").unwrap();
         
         let engine = VerifyEngine::new();
         let result = engine.verify(
@@ -483,51 +454,6 @@ mod tests {
         
         // Cleanup
         fs::remove_file(db_path).unwrap();
-    }
-
-    #[test]
-    fn test_detect_algorithm_md5() {
-        let engine = VerifyEngine::new();
-        let mut database = HashMap::new();
-        database.insert(PathBuf::from("file.txt"), "d41d8cd98f00b204e9800998ecf8427e".to_string());
-        
-        let algorithm = engine.detect_algorithm(&database).unwrap();
-        assert_eq!(algorithm, "md5");
-    }
-
-    #[test]
-    fn test_detect_algorithm_sha256() {
-        let engine = VerifyEngine::new();
-        let mut database = HashMap::new();
-        database.insert(
-            PathBuf::from("file.txt"),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()
-        );
-        
-        let algorithm = engine.detect_algorithm(&database).unwrap();
-        assert_eq!(algorithm, "sha256");
-    }
-
-    #[test]
-    fn test_detect_algorithm_sha512() {
-        let engine = VerifyEngine::new();
-        let mut database = HashMap::new();
-        database.insert(
-            PathBuf::from("file.txt"),
-            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e".to_string()
-        );
-        
-        let algorithm = engine.detect_algorithm(&database).unwrap();
-        assert_eq!(algorithm, "sha512");
-    }
-
-    #[test]
-    fn test_detect_algorithm_empty_database() {
-        let engine = VerifyEngine::new();
-        let database = HashMap::new();
-        
-        let result = engine.detect_algorithm(&database);
-        assert!(result.is_err());
     }
 
     #[test]

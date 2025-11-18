@@ -9,24 +9,35 @@ use std::path::{Path, PathBuf};
 use crate::path_utils;
 use crate::error::HashUtilityError;
 
+/// Database entry with metadata
+#[derive(Debug, Clone)]
+pub struct DatabaseEntry {
+    pub hash: String,
+    pub algorithm: String,
+    pub fast_mode: bool,
+}
+
 /// Handler for reading and writing hash database files
 pub struct DatabaseHandler;
 
 impl DatabaseHandler {
     /// Write a single hash entry to the output writer
-    /// Format: `<hash>  <filepath>` (two spaces between hash and filepath)
+    /// Format: `<hash>  <algorithm>  <fast_mode>  <filepath>` (two spaces between fields)
     pub fn write_entry(
         writer: &mut impl Write,
         hash: &str,
+        algorithm: &str,
+        fast_mode: bool,
         path: &Path,
     ) -> io::Result<()> {
-        writeln!(writer, "{}  {}", hash, path.display())
+        let fast_str = if fast_mode { "fast" } else { "normal" };
+        writeln!(writer, "{}  {}  {}  {}", hash, algorithm, fast_str, path.display())
     }
     
     /// Read a hash database file and parse it into a HashMap
-    /// Maps file paths to their hash values
+    /// Maps file paths to their database entries (hash, algorithm, fast_mode)
     /// Malformed lines are skipped with a warning to stderr
-    pub fn read_database(path: &Path) -> Result<HashMap<PathBuf, String>, HashUtilityError> {
+    pub fn read_database(path: &Path) -> Result<HashMap<PathBuf, DatabaseEntry>, HashUtilityError> {
         let file = File::open(path).map_err(|e| {
             HashUtilityError::from_io_error(e, "reading database", Some(path.to_path_buf()))
         })?;
@@ -45,8 +56,12 @@ impl DatabaseHandler {
             
             // Parse line: split on two spaces
             match Self::parse_line(&line) {
-                Some((hash, file_path)) => {
-                    database.insert(file_path, hash);
+                Some((hash, algorithm, fast_mode, file_path)) => {
+                    database.insert(file_path, DatabaseEntry {
+                        hash,
+                        algorithm,
+                        fast_mode,
+                    });
                 }
                 None => {
                     // Warn about malformed line but continue processing (Requirement 2.4)
@@ -64,22 +79,31 @@ impl DatabaseHandler {
     }
     
     /// Parse a single line from the database file
-    /// Expected format: `<hash>  <filepath>` (two spaces)
+    /// Expected format: `<hash>  <algorithm>  <fast_mode>  <filepath>` (two spaces between fields)
     /// Returns None if the line is malformed
     /// Handles both forward and backward slashes in paths
-    fn parse_line(line: &str) -> Option<(String, PathBuf)> {
+    fn parse_line(line: &str) -> Option<(String, String, bool, PathBuf)> {
         // Split on two spaces (the standard format)
-        let parts: Vec<&str> = line.splitn(2, "  ").collect();
+        let parts: Vec<&str> = line.split("  ").collect();
         
-        if parts.len() == 2 {
+        if parts.len() == 4 {
             let hash = parts[0].trim();
-            let path_str = parts[1].trim();
+            let algorithm = parts[1].trim();
+            let fast_mode_str = parts[2].trim();
+            let path_str = parts[3].trim();
             
-            // Validate that hash is not empty and path is not empty
-            if !hash.is_empty() && !path_str.is_empty() {
+            // Parse fast_mode
+            let fast_mode = match fast_mode_str {
+                "fast" => true,
+                "normal" => false,
+                _ => return None, // Invalid fast_mode value
+            };
+            
+            // Validate that all fields are not empty
+            if !hash.is_empty() && !algorithm.is_empty() && !path_str.is_empty() {
                 // Use path_utils to parse the path with proper separator handling
                 let path = path_utils::parse_database_path(path_str);
-                return Some((hash.to_string(), path));
+                return Some((hash.to_string(), algorithm.to_string(), fast_mode, path));
             }
         }
         
@@ -96,12 +120,14 @@ mod tests {
     fn test_write_entry() {
         let mut buffer = Vec::new();
         let hash = "d41d8cd98f00b204e9800998ecf8427e";
+        let algorithm = "md5";
+        let fast_mode = false;
         let path = Path::new("./test/file.txt");
         
-        DatabaseHandler::write_entry(&mut buffer, hash, path).unwrap();
+        DatabaseHandler::write_entry(&mut buffer, hash, algorithm, fast_mode, path).unwrap();
         
         let output = String::from_utf8(buffer).unwrap();
-        assert_eq!(output, "d41d8cd98f00b204e9800998ecf8427e  ./test/file.txt\n");
+        assert_eq!(output, "d41d8cd98f00b204e9800998ecf8427e  md5  normal  ./test/file.txt\n");
     }
     
     #[test]
@@ -111,53 +137,61 @@ mod tests {
         DatabaseHandler::write_entry(
             &mut buffer,
             "abc123",
+            "sha256",
+            false,
             Path::new("file1.txt")
         ).unwrap();
         
         DatabaseHandler::write_entry(
             &mut buffer,
             "def456",
+            "sha256",
+            true,
             Path::new("file2.txt")
         ).unwrap();
         
         let output = String::from_utf8(buffer).unwrap();
-        assert_eq!(output, "abc123  file1.txt\ndef456  file2.txt\n");
+        assert_eq!(output, "abc123  sha256  normal  file1.txt\ndef456  sha256  fast  file2.txt\n");
     }
     
     #[test]
     fn test_parse_line_valid() {
-        let line = "d41d8cd98f00b204e9800998ecf8427e  ./test/file.txt";
+        let line = "d41d8cd98f00b204e9800998ecf8427e  md5  normal  ./test/file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_some());
-        let (hash, path) = result.unwrap();
+        let (hash, algorithm, fast_mode, path) = result.unwrap();
         assert_eq!(hash, "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(algorithm, "md5");
+        assert_eq!(fast_mode, false);
         assert_eq!(path, PathBuf::from("./test/file.txt"));
     }
     
     #[test]
     fn test_parse_line_with_spaces_in_path() {
-        let line = "abc123  ./path with spaces/file.txt";
+        let line = "abc123  sha256  fast  ./path with spaces/file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_some());
-        let (hash, path) = result.unwrap();
+        let (hash, algorithm, fast_mode, path) = result.unwrap();
         assert_eq!(hash, "abc123");
+        assert_eq!(algorithm, "sha256");
+        assert_eq!(fast_mode, true);
         assert_eq!(path, PathBuf::from("./path with spaces/file.txt"));
     }
     
     #[test]
-    fn test_parse_line_malformed_single_space() {
-        let line = "abc123 file.txt";  // Only one space
+    fn test_parse_line_malformed_missing_fields() {
+        let line = "abc123  sha256  file.txt";  // Missing fast_mode field
         let result = DatabaseHandler::parse_line(line);
         
-        // Should fail because we expect two spaces
+        // Should fail because we expect 4 fields
         assert!(result.is_none());
     }
     
     #[test]
     fn test_parse_line_malformed_no_space() {
-        let line = "abc123file.txt";
+        let line = "abc123sha256normalfile.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_none());
@@ -165,7 +199,7 @@ mod tests {
     
     #[test]
     fn test_parse_line_empty_hash() {
-        let line = "  file.txt";
+        let line = "  sha256  normal  file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_none());
@@ -173,9 +207,18 @@ mod tests {
     
     #[test]
     fn test_parse_line_empty_path() {
-        let line = "abc123  ";
+        let line = "abc123  sha256  normal  ";
         let result = DatabaseHandler::parse_line(line);
         
+        assert!(result.is_none());
+    }
+    
+    #[test]
+    fn test_parse_line_invalid_fast_mode() {
+        let line = "abc123  sha256  invalid  file.txt";
+        let result = DatabaseHandler::parse_line(line);
+        
+        // Should fail because fast_mode must be "fast" or "normal"
         assert!(result.is_none());
     }
     
@@ -183,9 +226,9 @@ mod tests {
     fn test_read_database() {
         // Create a temporary database file
         let temp_file = "test_db_temp.txt";
-        let content = "d41d8cd98f00b204e9800998ecf8427e  ./empty.txt\n\
-                       5d41402abc4b2a76b9719d911017c592  ./hello.txt\n\
-                       098f6bcd4621d373cade4e832627b4f6  ./test/data.bin\n";
+        let content = "d41d8cd98f00b204e9800998ecf8427e  md5  normal  ./empty.txt\n\
+                       5d41402abc4b2a76b9719d911017c592  md5  normal  ./hello.txt\n\
+                       098f6bcd4621d373cade4e832627b4f6  md5  fast  ./test/data.bin\n";
         fs::write(temp_file, content).unwrap();
         
         // Read database
@@ -193,18 +236,21 @@ mod tests {
         
         // Verify entries
         assert_eq!(database.len(), 3);
-        assert_eq!(
-            database.get(&PathBuf::from("./empty.txt")),
-            Some(&"d41d8cd98f00b204e9800998ecf8427e".to_string())
-        );
-        assert_eq!(
-            database.get(&PathBuf::from("./hello.txt")),
-            Some(&"5d41402abc4b2a76b9719d911017c592".to_string())
-        );
-        assert_eq!(
-            database.get(&PathBuf::from("./test/data.bin")),
-            Some(&"098f6bcd4621d373cade4e832627b4f6".to_string())
-        );
+        
+        let empty_entry = database.get(&PathBuf::from("./empty.txt")).unwrap();
+        assert_eq!(empty_entry.hash, "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(empty_entry.algorithm, "md5");
+        assert_eq!(empty_entry.fast_mode, false);
+        
+        let hello_entry = database.get(&PathBuf::from("./hello.txt")).unwrap();
+        assert_eq!(hello_entry.hash, "5d41402abc4b2a76b9719d911017c592");
+        assert_eq!(hello_entry.algorithm, "md5");
+        assert_eq!(hello_entry.fast_mode, false);
+        
+        let data_entry = database.get(&PathBuf::from("./test/data.bin")).unwrap();
+        assert_eq!(data_entry.hash, "098f6bcd4621d373cade4e832627b4f6");
+        assert_eq!(data_entry.algorithm, "md5");
+        assert_eq!(data_entry.fast_mode, true);
         
         // Cleanup
         fs::remove_file(temp_file).unwrap();
@@ -213,9 +259,9 @@ mod tests {
     #[test]
     fn test_read_database_with_empty_lines() {
         let temp_file = "test_db_empty_lines_temp.txt";
-        let content = "abc123  file1.txt\n\
+        let content = "abc123  sha256  normal  file1.txt\n\
                        \n\
-                       def456  file2.txt\n\
+                       def456  sha256  fast  file2.txt\n\
                        \n";
         fs::write(temp_file, content).unwrap();
         
@@ -231,9 +277,9 @@ mod tests {
     #[test]
     fn test_read_database_with_malformed_lines() {
         let temp_file = "test_db_malformed_temp.txt";
-        let content = "abc123  file1.txt\n\
+        let content = "abc123  sha256  normal  file1.txt\n\
                        malformed line without proper format\n\
-                       def456  file2.txt\n";
+                       def456  sha256  fast  file2.txt\n";
         fs::write(temp_file, content).unwrap();
         
         // Should skip malformed line and continue
@@ -257,8 +303,8 @@ mod tests {
     fn test_round_trip() {
         // Write entries to a buffer
         let mut buffer = Vec::new();
-        DatabaseHandler::write_entry(&mut buffer, "hash1", Path::new("file1.txt")).unwrap();
-        DatabaseHandler::write_entry(&mut buffer, "hash2", Path::new("file2.txt")).unwrap();
+        DatabaseHandler::write_entry(&mut buffer, "hash1", "sha256", false, Path::new("file1.txt")).unwrap();
+        DatabaseHandler::write_entry(&mut buffer, "hash2", "sha256", true, Path::new("file2.txt")).unwrap();
         
         // Write buffer to file
         let temp_file = "test_round_trip_temp.txt";
@@ -269,8 +315,16 @@ mod tests {
         
         // Verify
         assert_eq!(database.len(), 2);
-        assert_eq!(database.get(&PathBuf::from("file1.txt")), Some(&"hash1".to_string()));
-        assert_eq!(database.get(&PathBuf::from("file2.txt")), Some(&"hash2".to_string()));
+        
+        let entry1 = database.get(&PathBuf::from("file1.txt")).unwrap();
+        assert_eq!(entry1.hash, "hash1");
+        assert_eq!(entry1.algorithm, "sha256");
+        assert_eq!(entry1.fast_mode, false);
+        
+        let entry2 = database.get(&PathBuf::from("file2.txt")).unwrap();
+        assert_eq!(entry2.hash, "hash2");
+        assert_eq!(entry2.algorithm, "sha256");
+        assert_eq!(entry2.fast_mode, true);
         
         // Cleanup
         fs::remove_file(temp_file).unwrap();
@@ -278,36 +332,42 @@ mod tests {
     
     #[test]
     fn test_parse_line_with_forward_slashes() {
-        let line = "abc123  path/to/file.txt";
+        let line = "abc123  sha256  normal  path/to/file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_some());
-        let (hash, path) = result.unwrap();
+        let (hash, algorithm, fast_mode, path) = result.unwrap();
         assert_eq!(hash, "abc123");
+        assert_eq!(algorithm, "sha256");
+        assert_eq!(fast_mode, false);
         // Path should be parsed correctly regardless of platform
         assert!(path.to_str().unwrap().contains("file.txt"));
     }
     
     #[test]
     fn test_parse_line_with_backward_slashes() {
-        let line = "abc123  path\\to\\file.txt";
+        let line = "abc123  sha256  fast  path\\to\\file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_some());
-        let (hash, path) = result.unwrap();
+        let (hash, algorithm, fast_mode, path) = result.unwrap();
         assert_eq!(hash, "abc123");
+        assert_eq!(algorithm, "sha256");
+        assert_eq!(fast_mode, true);
         // Path should be parsed correctly regardless of platform
         assert!(path.to_str().unwrap().contains("file.txt"));
     }
     
     #[test]
     fn test_parse_line_with_mixed_slashes() {
-        let line = "abc123  path/to\\mixed/file.txt";
+        let line = "abc123  sha256  normal  path/to\\mixed/file.txt";
         let result = DatabaseHandler::parse_line(line);
         
         assert!(result.is_some());
-        let (hash, path) = result.unwrap();
+        let (hash, algorithm, fast_mode, path) = result.unwrap();
         assert_eq!(hash, "abc123");
+        assert_eq!(algorithm, "sha256");
+        assert_eq!(fast_mode, false);
         // Path should be parsed correctly with normalized separators
         assert!(path.to_str().unwrap().contains("file.txt"));
     }
@@ -316,9 +376,9 @@ mod tests {
     fn test_read_database_with_mixed_separators() {
         let temp_file = "test_db_mixed_sep_temp.txt";
         // Create database with mixed path separators
-        let content = "abc123  path/to/file1.txt\n\
-                       def456  path\\to\\file2.txt\n\
-                       ghi789  path/to\\file3.txt\n";
+        let content = "abc123  sha256  normal  path/to/file1.txt\n\
+                       def456  sha256  fast  path\\to\\file2.txt\n\
+                       ghi789  sha256  normal  path/to\\file3.txt\n";
         fs::write(temp_file, content).unwrap();
         
         let database = DatabaseHandler::read_database(Path::new(temp_file)).unwrap();

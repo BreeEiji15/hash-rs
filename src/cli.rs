@@ -43,6 +43,10 @@ pub enum Command {
         /// Output file (optional, defaults to stdout)
         #[arg(short = 'o', long = "output", value_name = "FILE")]
         output: Option<PathBuf>,
+        
+        /// Enable fast mode for large files (samples first, middle, and last 100MB)
+        #[arg(short = 'F', long = "fast")]
+        fast: bool,
     },
     
     /// Scan directory and generate hash database
@@ -65,6 +69,10 @@ pub enum Command {
         /// Enable parallel processing
         #[arg(short = 'p', long = "parallel")]
         parallel: bool,
+        
+        /// Enable fast mode for large files (samples first, middle, and last 100MB)
+        #[arg(short = 'F', long = "fast")]
+        fast: bool,
     },
     
     /// Verify directory against hash database
@@ -139,10 +147,11 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Hash { file, algorithms, output } => {
+            Command::Hash { file, algorithms, output, fast } => {
                 assert_eq!(file, PathBuf::from("test.txt"));
                 assert_eq!(algorithms, vec!["sha256"]);
                 assert_eq!(output, None);
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Hash command"),
         }
@@ -154,10 +163,11 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Hash { file, algorithms, output } => {
+            Command::Hash { file, algorithms, output, fast } => {
                 assert_eq!(file, PathBuf::from("test.txt"));
                 assert_eq!(algorithms, vec!["sha256", "md5"]);
                 assert_eq!(output, None);
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Hash command"),
         }
@@ -169,10 +179,11 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Hash { file, algorithms, output } => {
+            Command::Hash { file, algorithms, output, fast } => {
                 assert_eq!(file, PathBuf::from("test.txt"));
                 assert_eq!(algorithms, vec!["sha256"]);
                 assert_eq!(output, Some(PathBuf::from("output.txt")));
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Hash command"),
         }
@@ -184,9 +195,58 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Hash { file, algorithms, .. } => {
+            Command::Hash { file, algorithms, fast, .. } => {
                 assert_eq!(file, PathBuf::from("test.txt"));
                 assert_eq!(algorithms, vec!["sha256"]);
+                assert_eq!(fast, false);
+            }
+            _ => panic!("Expected Hash command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_hash_command_with_fast_mode() {
+        let args = vec!["hash", "hash", "-f", "test.txt", "-a", "sha256", "-F"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Hash { file, algorithms, output, fast } => {
+                assert_eq!(file, PathBuf::from("test.txt"));
+                assert_eq!(algorithms, vec!["sha256"]);
+                assert_eq!(output, None);
+                assert_eq!(fast, true);
+            }
+            _ => panic!("Expected Hash command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_hash_command_with_fast_mode_long_flag() {
+        let args = vec!["hash", "hash", "-f", "test.txt", "--fast"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Hash { file, algorithms, output, fast } => {
+                assert_eq!(file, PathBuf::from("test.txt"));
+                assert_eq!(algorithms, vec!["sha256"]); // default
+                assert_eq!(output, None);
+                assert_eq!(fast, true);
+            }
+            _ => panic!("Expected Hash command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_hash_command_with_fast_and_multiple_algorithms() {
+        let args = vec!["hash", "hash", "-f", "test.txt", "-a", "sha256", "-a", "md5", "-F"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Hash { file, algorithms, output, fast } => {
+                assert_eq!(file, PathBuf::from("test.txt"));
+                assert_eq!(algorithms, vec!["sha256", "md5"]);
+                assert_eq!(output, None);
+                assert_eq!(fast, true);
             }
             _ => panic!("Expected Hash command"),
         }
@@ -198,11 +258,12 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Scan { directory, algorithm, output, parallel } => {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
                 assert_eq!(directory, PathBuf::from("/path/to/dir"));
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, false);
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Scan command"),
         }
@@ -214,11 +275,12 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Scan { directory, algorithm, output, parallel } => {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
                 assert_eq!(directory, PathBuf::from("/path/to/dir"));
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Scan command"),
         }
@@ -230,11 +292,12 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Scan { directory, algorithm, output, parallel } => {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
                 assert_eq!(directory, PathBuf::from("/path/to/dir"));
                 assert_eq!(algorithm, "sha256");
                 assert_eq!(output, PathBuf::from("hashes.txt"));
                 assert_eq!(parallel, true);
+                assert_eq!(fast, false);
             }
             _ => panic!("Expected Scan command"),
         }
@@ -361,8 +424,9 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Hash { algorithms, .. } => {
+            Command::Hash { algorithms, fast, .. } => {
                 assert_eq!(algorithms, vec!["sha256"]); // default algorithm
+                assert_eq!(fast, false); // default fast mode
             }
             _ => panic!("Expected Hash command"),
         }
@@ -374,8 +438,60 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         
         match cli.command {
-            Command::Scan { algorithm, .. } => {
+            Command::Scan { algorithm, fast, .. } => {
                 assert_eq!(algorithm, "sha256"); // default algorithm
+                assert_eq!(fast, false); // default fast mode
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_scan_command_with_fast_mode() {
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt", "-F"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
+                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(algorithm, "sha256");
+                assert_eq!(output, PathBuf::from("hashes.txt"));
+                assert_eq!(parallel, false);
+                assert_eq!(fast, true);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_scan_command_with_fast_mode_long_flag() {
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt", "--fast"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
+                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(algorithm, "sha256");
+                assert_eq!(output, PathBuf::from("hashes.txt"));
+                assert_eq!(parallel, false);
+                assert_eq!(fast, true);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_scan_command_with_parallel_and_fast() {
+        let args = vec!["hash", "scan", "-d", "/path/to/dir", "-a", "sha256", "-o", "hashes.txt", "-p", "-F"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Command::Scan { directory, algorithm, output, parallel, fast } => {
+                assert_eq!(directory, PathBuf::from("/path/to/dir"));
+                assert_eq!(algorithm, "sha256");
+                assert_eq!(output, PathBuf::from("hashes.txt"));
+                assert_eq!(parallel, true);
+                assert_eq!(fast, true);
             }
             _ => panic!("Expected Scan command"),
         }

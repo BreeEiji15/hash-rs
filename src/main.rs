@@ -27,11 +27,11 @@ fn main() {
     
     // Dispatch to appropriate handler
     let result = match cli.command {
-        Command::Hash { file, algorithms, output } => {
-            handle_hash_command(&file, &algorithms, output.as_deref())
+        Command::Hash { file, algorithms, output, fast } => {
+            handle_hash_command(&file, &algorithms, output.as_deref(), fast)
         }
-        Command::Scan { directory, algorithm, output, parallel } => {
-            handle_scan_command(&directory, &algorithm, &output, parallel)
+        Command::Scan { directory, algorithm, output, parallel, fast } => {
+            handle_scan_command(&directory, &algorithm, &output, parallel, fast)
         }
         Command::Verify { database, directory } => {
             handle_verify_command(&database, &directory)
@@ -56,11 +56,22 @@ fn handle_hash_command(
     file: &std::path::Path,
     algorithms: &[String],
     output: Option<&std::path::Path>,
+    fast: bool,
 ) -> Result<(), HashUtilityError> {
     let computer = HashComputer::new();
     
     // Compute hashes for all specified algorithms
-    let results = computer.compute_multiple_hashes(file, algorithms)?;
+    let results = if fast {
+        // Use fast mode for each algorithm
+        let mut results = Vec::new();
+        for algorithm in algorithms {
+            results.push(computer.compute_hash_fast(file, algorithm)?);
+        }
+        results
+    } else {
+        // Use normal mode
+        computer.compute_multiple_hashes(file, algorithms)?
+    };
     
     // Format output
     let mut output_lines = Vec::new();
@@ -90,8 +101,9 @@ fn handle_scan_command(
     algorithm: &str,
     output: &std::path::Path,
     parallel: bool,
+    fast: bool,
 ) -> Result<(), HashUtilityError> {
-    let engine = ScanEngine::with_parallel(parallel);
+    let engine = ScanEngine::with_parallel(parallel).with_fast_mode(fast);
     
     // Scan directory and write database
     let _stats = engine.scan_directory(directory, algorithm, output)?;

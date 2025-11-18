@@ -164,13 +164,13 @@
     - Document RUSTFLAGS for optimal compilation
     - _Requirements: 1.3, 4.4, 4.5_
 
-- [-] 14. Implement fast mode for large file hashing
-  - [ ] 14.1 Add fast mode flag to CLI
+- [x] 14. Implement fast mode for large file hashing
+  - [x] 14.1 Add fast mode flag to CLI
     - Add `--fast` or `-F` flag to scan command
     - Update help text to explain fast mode behavior
     - _Requirements: 1.1, 2.1_
   
-  - [ ] 14.2 Implement fast hash computation strategy
+  - [x] 14.2 Implement fast hash computation strategy
     - Create FastHashComputer that samples three regions of file
     - Read first 100MB of file
     - Read last 100MB of file

@@ -28,6 +28,7 @@ pub struct ScanStats {
 pub struct ScanEngine {
     computer: HashComputer,
     parallel: bool,
+    fast_mode: bool,
 }
 
 impl ScanEngine {
@@ -36,6 +37,7 @@ impl ScanEngine {
         Self {
             computer: HashComputer::new(),
             parallel: false,
+            fast_mode: false,
         }
     }
     
@@ -44,7 +46,14 @@ impl ScanEngine {
         Self {
             computer: HashComputer::new(),
             parallel,
+            fast_mode: false,
         }
+    }
+    
+    /// Enable or disable fast mode for large file hashing
+    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
+        self.fast_mode = fast_mode;
+        self
     }
     
     /// Scan a directory recursively and write hash database to output file
@@ -73,6 +82,10 @@ impl ScanEngine {
         println!("Scanning directory: {}", root.display());
         let files = self.collect_files(root)?;
         println!("Found {} files to process", files.len());
+        
+        if self.fast_mode {
+            println!("Fast mode enabled: sampling first, middle, and last 100MB of large files");
+        }
         
         if self.parallel {
             self.scan_parallel(&files, algorithm, output, &canonical_root, start_time)
@@ -112,8 +125,14 @@ impl ScanEngine {
                 );
             }
             
-            // Compute hash for the file
-            match self.computer.compute_hash(file_path, algorithm) {
+            // Compute hash for the file (using fast mode if enabled)
+            let hash_result = if self.fast_mode {
+                self.computer.compute_hash_fast(file_path, algorithm)
+            } else {
+                self.computer.compute_hash(file_path, algorithm)
+            };
+            
+            match hash_result {
                 Ok(result) => {
                     // Try to get relative path for cleaner database entries
                     let path_to_write = match path_utils::get_relative_path(file_path, canonical_root) {
@@ -121,10 +140,12 @@ impl ScanEngine {
                         Err(_) => file_path.clone(),
                     };
                     
-                    // Write hash entry to database
+                    // Write hash entry to database with metadata
                     if let Err(e) = DatabaseHandler::write_entry(
                         &mut writer,
                         &result.hash,
+                        algorithm,
+                        self.fast_mode,
                         &path_to_write,
                     ) {
                         eprintln!("Warning: Failed to write entry for {}: {}", 
@@ -179,6 +200,9 @@ impl ScanEngine {
         let files_failed = Arc::new(Mutex::new(0usize));
         let total_bytes = Arc::new(Mutex::new(0u64));
         
+        // Capture fast_mode for use in closure
+        let fast_mode = self.fast_mode;
+        
         // Compute hashes in parallel
         let results: Vec<_> = files.par_iter().enumerate().map(|(index, file_path)| {
             // Display progress (thread-safe)
@@ -190,9 +214,15 @@ impl ScanEngine {
                 );
             }
             
-            // Compute hash for the file
+            // Compute hash for the file (using fast mode if enabled)
             let computer = HashComputer::new();
-            match computer.compute_hash(file_path, algorithm) {
+            let hash_result = if fast_mode {
+                computer.compute_hash_fast(file_path, algorithm)
+            } else {
+                computer.compute_hash(file_path, algorithm)
+            };
+            
+            match hash_result {
                 Ok(result) => {
                     // Try to get relative path for cleaner database entries
                     let path_to_write = match path_utils::get_relative_path(file_path, canonical_root) {
@@ -235,6 +265,8 @@ impl ScanEngine {
             if let Err(e) = DatabaseHandler::write_entry(
                 &mut writer,
                 &result.0,
+                algorithm,
+                fast_mode,
                 &result.1,
             ) {
                 eprintln!("Warning: Failed to write entry: {}", e);

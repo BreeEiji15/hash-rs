@@ -2,7 +2,7 @@
 // Provides hash algorithm registry and computation logic
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use crate::error::HashUtilityError;
 
@@ -381,6 +381,10 @@ pub struct HashComputer {
     buffer_size: usize,
 }
 
+// Constants for fast mode sampling
+const FAST_MODE_SAMPLE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+const FAST_MODE_THRESHOLD: u64 = 3 * FAST_MODE_SAMPLE_SIZE; // 300MB
+
 impl HashComputer {
     /// Create a new HashComputer with default buffer size (64KB)
     pub fn new() -> Self {
@@ -483,6 +487,105 @@ impl HashComputer {
         }
         
         Ok(results)
+    }
+    
+    /// Compute hash for a file using fast mode (sampling strategy)
+    /// 
+    /// For files larger than 300MB, samples three 100MB regions:
+    /// - First 100MB
+    /// - Middle 100MB (centered at file_size/2)
+    /// - Last 100MB
+    /// 
+    /// For files smaller than 300MB, uses the full file.
+    pub fn compute_hash_fast(
+        &self,
+        path: &Path,
+        algorithm: &str,
+    ) -> Result<HashResult, HashError> {
+        
+        // Get hasher for the specified algorithm
+        let mut hasher = HashRegistry::get_hasher(algorithm)?;
+        
+        // Open file for reading with better error context
+        let mut file = File::open(path).map_err(|e| {
+            HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+        })?;
+        
+        // Get file size
+        let file_size = file.metadata()
+            .map_err(|e| HashUtilityError::from_io_error(e, "reading metadata", Some(path.to_path_buf())))?
+            .len();
+        
+        // If file is smaller than threshold, hash the entire file
+        if file_size < FAST_MODE_THRESHOLD {
+            let mut buffer = vec![0u8; self.buffer_size];
+            loop {
+                let bytes_read = file.read(&mut buffer).map_err(|e| {
+                    HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+                })?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..bytes_read]);
+            }
+        } else {
+            // Sample three regions: first 100MB, middle 100MB, last 100MB
+            
+            // Read first 100MB
+            self.read_region(&mut file, &mut hasher, 0, FAST_MODE_SAMPLE_SIZE, path)?;
+            
+            // Calculate middle region: centered at file_size/2
+            let middle_start = (file_size / 2).saturating_sub(FAST_MODE_SAMPLE_SIZE / 2);
+            self.read_region(&mut file, &mut hasher, middle_start, FAST_MODE_SAMPLE_SIZE, path)?;
+            
+            // Read last 100MB
+            let last_start = file_size.saturating_sub(FAST_MODE_SAMPLE_SIZE);
+            self.read_region(&mut file, &mut hasher, last_start, FAST_MODE_SAMPLE_SIZE, path)?;
+        }
+        
+        // Finalize hash and convert to hex
+        let hash_bytes = hasher.finalize();
+        let hash_hex = bytes_to_hex(&hash_bytes);
+        
+        Ok(HashResult {
+            algorithm: algorithm.to_string(),
+            hash: hash_hex,
+            file_path: path.to_path_buf(),
+        })
+    }
+    
+    /// Helper function to read a specific region of a file
+    fn read_region(
+        &self,
+        file: &mut File,
+        hasher: &mut Box<dyn Hasher>,
+        start: u64,
+        length: u64,
+        path: &Path,
+    ) -> Result<(), HashError> {
+        
+        // Seek to the start position
+        file.seek(std::io::SeekFrom::Start(start))
+            .map_err(|e| HashUtilityError::from_io_error(e, "seeking", Some(path.to_path_buf())))?;
+        
+        // Read up to 'length' bytes
+        let mut buffer = vec![0u8; self.buffer_size];
+        let mut bytes_remaining = length;
+        
+        while bytes_remaining > 0 {
+            let to_read = std::cmp::min(bytes_remaining, buffer.len() as u64) as usize;
+            let bytes_read = file.read(&mut buffer[..to_read])
+                .map_err(|e| HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf())))?;
+            
+            if bytes_read == 0 {
+                break; // End of file
+            }
+            
+            hasher.update(&buffer[..bytes_read]);
+            bytes_remaining -= bytes_read as u64;
+        }
+        
+        Ok(())
     }
 }
 
@@ -599,6 +702,74 @@ mod tests {
             _ => panic!("Expected UnsupportedAlgorithm error"),
         }
         
+        fs::remove_file(temp_file).unwrap();
+    }
+    
+    #[test]
+    fn test_compute_hash_fast_small_file() {
+        // Create a small test file (less than 300MB)
+        let test_data = b"hello world";
+        let temp_file = "test_fast_small_temp.txt";
+        fs::write(temp_file, test_data).unwrap();
+        
+        // Compute hash using fast mode
+        let computer = HashComputer::new();
+        let result_fast = computer.compute_hash_fast(Path::new(temp_file), "sha256").unwrap();
+        
+        // Compute hash using normal mode
+        let result_normal = computer.compute_hash(Path::new(temp_file), "sha256").unwrap();
+        
+        // For small files, fast mode should produce the same hash as normal mode
+        assert_eq!(result_fast.hash, result_normal.hash);
+        assert_eq!(result_fast.algorithm, "sha256");
+        assert_eq!(result_fast.file_path, Path::new(temp_file));
+        
+        // Cleanup
+        fs::remove_file(temp_file).unwrap();
+    }
+    
+    #[test]
+    fn test_compute_hash_fast_deterministic() {
+        // Create a test file
+        let test_data = vec![b'x'; 1024 * 1024]; // 1MB file
+        let temp_file = "test_fast_deterministic_temp.txt";
+        fs::write(temp_file, &test_data).unwrap();
+        
+        // Compute hash twice using fast mode
+        let computer = HashComputer::new();
+        let result1 = computer.compute_hash_fast(Path::new(temp_file), "sha256").unwrap();
+        let result2 = computer.compute_hash_fast(Path::new(temp_file), "sha256").unwrap();
+        
+        // Results should be identical
+        assert_eq!(result1.hash, result2.hash);
+        
+        // Cleanup
+        fs::remove_file(temp_file).unwrap();
+    }
+    
+    #[test]
+    fn test_compute_hash_fast_large_file() {
+        // Create a large test file (larger than 300MB threshold)
+        // For testing purposes, we'll create a smaller file and verify the logic works
+        let temp_file = "test_fast_large_temp.txt";
+        let mut file = fs::File::create(temp_file).unwrap();
+        
+        // Write 350MB of data (more than 300MB threshold)
+        let chunk = vec![b'a'; 1024 * 1024]; // 1MB chunk
+        for _ in 0..350 {
+            file.write_all(&chunk).unwrap();
+        }
+        drop(file);
+        
+        // Compute hash using fast mode
+        let computer = HashComputer::new();
+        let result = computer.compute_hash_fast(Path::new(temp_file), "sha256").unwrap();
+        
+        // Verify hash is computed (not checking exact value, just that it works)
+        assert_eq!(result.hash.len(), 64);  // SHA-256 produces 64 hex characters
+        assert_eq!(result.algorithm, "sha256");
+        
+        // Cleanup
         fs::remove_file(temp_file).unwrap();
     }
 }
