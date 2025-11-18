@@ -279,7 +279,7 @@ fn test_international_filenames_scan() {
     
     // Run scan command
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "scan", "-d", test_dir, "-o", output_db])
+        .args(&["run", "--release", "--", "scan", "-d", test_dir, "-b", output_db])
         .output()
         .expect("Failed to execute scan command");
     
@@ -414,7 +414,7 @@ fn test_progress_bar_with_unicode_filenames() {
     
     // Run scan with progress bar
     let output = Command::new("cargo")
-        .args(&["run", "--release", "--", "scan", "-d", test_dir, "-o", "test_progress_output.txt"])
+        .args(&["run", "--release", "--", "scan", "-d", test_dir, "-b", "test_progress_output.txt"])
         .output()
         .expect("Failed to execute scan command");
     

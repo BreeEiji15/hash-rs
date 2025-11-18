@@ -44,11 +44,11 @@ fn main() {
     
     // Dispatch to appropriate handler
     let result = match cli.command {
-        Some(Command::Scan { directory, algorithm, output, hdd, fast, format, json, compress }) => {
-            handle_scan_command(&directory, &algorithm, &output, !hdd, fast, &format, json, compress)
+        Some(Command::Scan { directory, algorithm, database, hdd, fast, format, json, compress }) => {
+            handle_scan_command(&directory, &algorithm, &database, !hdd, fast, &format, json, compress)
         }
-        Some(Command::Verify { database, directory, json }) => {
-            handle_verify_command(&database, &directory, json)
+        Some(Command::Verify { database, directory, hdd, json }) => {
+            handle_verify_command(&database, &directory, !hdd, json)
         }
         Some(Command::Benchmark { size_mb, json }) => {
             handle_benchmark_command(size_mb, json)
@@ -356,9 +356,10 @@ fn handle_scan_command(
 fn handle_verify_command(
     database_pattern: &str,
     directory_pattern: &str,
+    parallel: bool,
     json: bool,
 ) -> Result<(), HashUtilityError> {
-    let engine = VerifyEngine::new();
+    let engine = VerifyEngine::with_parallel(parallel);
     
     // Expand wildcard patterns
     let databases = wildcard::expand_pattern(database_pattern)?;

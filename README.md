@@ -34,10 +34,10 @@ cargo build --release
 cat myfile.txt | ./target/release/hash
 
 # Scan directory (parallel by default)
-./target/release/hash scan -d ./my_dir -o hashes.db
+./target/release/hash scan -d ./my_dir -b hashes.db
 
 # Scan on old HDD (sequential)
-./target/release/hash scan -d ./my_dir -o hashes.db --hdd
+./target/release/hash scan -d ./my_dir -b hashes.db --hdd
 
 # Verify
 ./target/release/hash verify -b hashes.db -d ./my_dir
@@ -73,7 +73,7 @@ hash "img202405*.jpg" -a sha256              # All images from May 2024
 Patterns work with all commands:
 
 ```bash
-hash scan -d "data/*/hashes" -a sha256 -o output.db    # Multiple directories
+hash scan -d "data/*/hashes" -a sha256 -b output.db    # Multiple directories
 hash verify -b "*.db" -d "data/*" --json               # Multiple databases/dirs
 ```
 
@@ -87,16 +87,54 @@ cat myfile.txt | hash -a sha256              # Hash from stdin
 ### Scan Directory
 
 ```bash
-hash scan -d /path/to/dir -o hashes.db                        # Basic (blake3, parallel)
-hash scan -d /path/to/dir -o hashes.db --hdd                  # Sequential for old HDDs
-hash scan -d /path/to/dir -a sha256 -o hashes.db              # Custom algorithm
-hash scan -d /path/to/dir -o hashes.db -f                     # Fast mode
-hash scan -d /path/to/dir -o hashes.db -f --hdd               # Fast mode, sequential
-hash scan -d /path/to/dir -o hashes.db --compress             # Compressed
-hash scan -d /path/to/dir -o hashes.db --format hashdeep      # Hashdeep format
+hash scan -d /path/to/dir -b hashes.db                        # Basic (blake3, parallel)
+hash scan -d /path/to/dir -b hashes.db --hdd                  # Sequential for old HDDs
+hash scan -d /path/to/dir -a sha256 -b hashes.db              # Custom algorithm
+hash scan -d /path/to/dir -b hashes.db -f                     # Fast mode
+hash scan -d /path/to/dir -b hashes.db -f --hdd               # Fast mode, sequential
+hash scan -d /path/to/dir -b hashes.db --compress             # Compressed
+hash scan -d /path/to/dir -b hashes.db --format hashdeep      # Hashdeep format
 ```
 
 ### Verify Directory
+
+```bash
+hash verify -b hashes.db -d /path/to/dir                      # Parallel (default)
+hash verify -b hashes.db -d /path/to/dir --hdd                # Sequential for old HDDs
+hash verify -b hashes.db -d /path/to/dir --json               # JSON output
+```
+
+## Performance Optimizations
+
+### Parallel Verification (Default)
+
+The verification engine uses parallel processing by default for significantly faster verification:
+
+```bash
+# Parallel verification (default, 2-4x faster)
+hash verify -b hashes.db -d /path/to/dir
+
+# Sequential verification (for old HDDs)
+hash verify -b hashes.db -d /path/to/dir --hdd
+```
+
+**Performance improvements:**
+- **Parallel by default**: Uses all CPU cores via rayon (like scan)
+- **Path canonicalization caching**: Reduces redundant filesystem calls
+- **Optimized file collection**: Efficient recursive directory traversal
+- **Reduced overhead**: Minimizes lock contention in parallel mode
+
+**Parallel mode (default):**
+- SSDs or NVMe drives (no seek penalty)
+- Large numbers of files (>1000)
+- Fast network storage
+- Modern systems with multiple cores
+
+**Sequential mode (--hdd flag):**
+- Old mechanical HDDs (avoid thrashing)
+- Network drives with high latency
+- Systems with limited CPU cores
+- When minimizing system load
 
 ```bash
 hash verify -b hashes.db -d /path/to/dir              # Verify
