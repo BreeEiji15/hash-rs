@@ -23,6 +23,8 @@ use crate::error::HashUtilityError;
     hash scan -d /path/to/dir -o hashes.txt --compress   # compressed output\n  \
     hash scan -d /path/to/dir -o hashes.txt --json          # JSON output\n  \
     hash verify -b hashes.txt -d /path/to/dir\n  \
+    hash compare db1.txt db2.txt                            # compare two databases\n  \
+    hash compare db1.txt db2.txt -o report.txt --format json  # JSON output\n  \
     hash benchmark\n  \
     hash list")]
 pub struct Cli {
@@ -137,6 +139,29 @@ pub enum Command {
         /// Output algorithm list as JSON instead of formatted table
         #[arg(long = "json")]
         json: bool,
+    },
+    
+    /// Compare two hash databases
+    /// 
+    /// Compares two hash database files to identify unchanged files, changed files,
+    /// removed files, added files, and duplicate hashes within each database.
+    /// Supports standard, hashdeep, and compressed (.xz) database formats.
+    Compare {
+        /// First hash database file path (supports .xz compressed files)
+        #[arg(value_name = "DATABASE1")]
+        database1: PathBuf,
+        
+        /// Second hash database file path (supports .xz compressed files)
+        #[arg(value_name = "DATABASE2")]
+        database2: PathBuf,
+        
+        /// Write comparison report to file instead of stdout
+        #[arg(short = 'o', long = "output", value_name = "FILE")]
+        output: Option<PathBuf>,
+        
+        /// Output format: 'plain-text' (default), 'json', or 'hashdeep'
+        #[arg(long = "format", value_name = "FORMAT", default_value = "plain-text")]
+        format: String,
     },
 }
 
@@ -665,5 +690,126 @@ mod tests {
         assert_eq!(cli.algorithms, vec!["sha256"]);
         assert_eq!(cli.output, Some(PathBuf::from("output.txt")));
         assert_eq!(cli.fast, false);
+    }
+    
+    #[test]
+    fn test_parse_compare_command() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, None);
+                assert_eq!(format, "plain-text"); // default format
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_output() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt", "-o", "report.txt"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, Some(PathBuf::from("report.txt")));
+                assert_eq!(format, "plain-text");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_output_long_flag() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt", "--output", "report.txt"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, Some(PathBuf::from("report.txt")));
+                assert_eq!(format, "plain-text");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_json_format() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt", "--format", "json"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, None);
+                assert_eq!(format, "json");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_hashdeep_format() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt", "--format", "hashdeep"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, None);
+                assert_eq!(format, "hashdeep");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_all_options() {
+        let args = vec!["hash", "compare", "db1.txt", "db2.txt", "-o", "report.json", "--format", "json"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt"));
+                assert_eq!(database2, PathBuf::from("db2.txt"));
+                assert_eq!(output, Some(PathBuf::from("report.json")));
+                assert_eq!(format, "json");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_with_compressed_databases() {
+        let args = vec!["hash", "compare", "db1.txt.xz", "db2.txt.xz"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        
+        match cli.command {
+            Some(Command::Compare { database1, database2, output, format }) => {
+                assert_eq!(database1, PathBuf::from("db1.txt.xz"));
+                assert_eq!(database2, PathBuf::from("db2.txt.xz"));
+                assert_eq!(output, None);
+                assert_eq!(format, "plain-text");
+            }
+            _ => panic!("Expected Compare command"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_compare_command_missing_database2() {
+        // Compare command requires both database arguments
+        let args = vec!["hash", "compare", "db1.txt"];
+        let result = Cli::try_parse_from(args);
+        
+        assert!(result.is_err());
     }
 }

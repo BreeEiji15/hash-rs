@@ -8,6 +8,7 @@ mod path_utils;
 mod error;
 mod ignore_handler;
 mod wildcard;
+mod compare;
 
 use cli::{parse_args, Command};
 use hash::{HashComputer, HashRegistry};
@@ -16,6 +17,7 @@ use verify::VerifyEngine;
 use benchmark::BenchmarkEngine;
 use database::DatabaseFormat;
 use error::HashUtilityError;
+use std::path::Path;
 use std::process;
 use std::io::IsTerminal;
 
@@ -53,6 +55,9 @@ fn main() {
         }
         Some(Command::List { json }) => {
             handle_list_command(json)
+        }
+        Some(Command::Compare { database1, database2, output, format }) => {
+            handle_compare_command(&database1, &database2, output.as_deref(), &format)
         }
         None => {
             // No subcommand means hash mode (default)
@@ -554,6 +559,69 @@ fn handle_list_command(json: bool) -> Result<(), HashUtilityError> {
         }
         
         println!();
+    }
+    
+    Ok(())
+}
+
+/// Handle the compare command: compare two hash databases
+fn handle_compare_command(
+    database1: &Path,
+    database2: &Path,
+    output: Option<&Path>,
+    format: &str,
+) -> Result<(), HashUtilityError> {
+    use compare::CompareEngine;
+    
+    // Create compare engine and run comparison
+    let engine = CompareEngine::new();
+    let report = engine.compare(database1, database2)?;
+    
+    // Format output based on requested format
+    let output_content = match format.to_lowercase().as_str() {
+        "plain-text" | "plain" | "text" => {
+            report.to_plain_text()
+        }
+        "json" => {
+            report.to_json().map_err(|e| {
+                HashUtilityError::InvalidArguments {
+                    message: format!("Failed to serialize JSON: {}", e),
+                }
+            })?
+        }
+        "hashdeep" => {
+            // For hashdeep format, we'll use plain text format
+            // (hashdeep doesn't have a specific comparison report format)
+            report.to_plain_text()
+        }
+        _ => {
+            return Err(HashUtilityError::InvalidArguments {
+                message: format!("Invalid format '{}'. Valid formats are: plain-text, json, hashdeep", format),
+            });
+        }
+    };
+    
+    // Write to output destination
+    if let Some(output_path) = output {
+        // Write to file
+        std::fs::write(output_path, output_content).map_err(|e| {
+            HashUtilityError::from_io_error(e, "writing output", Some(output_path.to_path_buf()))
+        })?;
+        
+        // Display summary to stdout
+        println!("Comparison report written to: {}", output_path.display());
+        println!("\nSummary:");
+        println!("  Database 1: {} files", report.db1_total_files);
+        println!("  Database 2: {} files", report.db2_total_files);
+        println!("  Unchanged:  {} files", report.unchanged_files);
+        println!("  Changed:    {} files", report.changed_files.len());
+        println!("  Removed:    {} files", report.removed_files.len());
+        println!("  Added:      {} files", report.added_files.len());
+        println!("  Duplicates in DB1: {} groups", report.duplicates_db1.len());
+        println!("  Duplicates in DB2: {} groups", report.duplicates_db2.len());
+    } else {
+        // Write to stdout
+        print!("{}", output_content);
     }
     
     Ok(())

@@ -441,3 +441,49 @@
     - Run `cargo clippy` for linting
     - Ensure all tests pass before creating release artifacts
     - _Requirements: 5.2_
+
+- [x] 28. Implement database comparison feature
+  - [x] 28.1 Create CompareEngine with database comparison logic
+    - Implement compare function to load two databases and compare entries
+    - Classify files into: unchanged (same hash), changed (different hash), removed (in db1 only), added (in db2 only)
+    - Detect duplicate hashes within each database
+    - Create CompareReport struct with all findings
+    - Create ChangedFile and DuplicateGroup structs
+    - _Requirements: 10.1, 10.3, 10.4, 10.5, 10.6_
+  
+  - [x] 28.2 Add compressed database support to CompareEngine
+    - Detect .xz file extension and automatically decompress before comparison
+    - Reuse existing decompression logic from database handler
+    - Support comparing: plain text vs plain text, compressed vs compressed, plain vs compressed
+    - Handle format detection transparently
+    - _Requirements: 10.10, 10.11_
+
+- [x] 29. Add compare command to CLI
+  - [x] 29.1 Add compare command to clap CLI definition
+    - Add Compare variant to Command enum
+    - Define arguments: database1, database2, --output, --format
+    - Support format options: plain-text (default), json, hashdeep
+    - Add help text and examples
+    - _Requirements: 10.1, 10.8, 10.9_
+
+- [x] 30. Implement compare output formatting
+  - [x] 30.1 Implement plain text output for comparison reports
+    - Format: summary section with counts, then sections for unchanged/changed/removed/added/duplicates
+    - Include file paths and hash values for changed files
+    - Group duplicates by hash value
+    - _Requirements: 10.7, 10.8_
+  
+  - [x] 30.2 Implement JSON output for comparison reports
+    - Structure: metadata, summary counts, arrays for each category
+    - Include all file paths and hash values
+    - Ensure valid JSON format
+    - _Requirements: 10.8, 10.9_
+
+- [x] 31. Integrate compare command into dispatcher
+  - [x] 31.1 Add compare command handling to main dispatcher
+    - Route Compare command to CompareEngine
+    - Load both databases using DatabaseHandler
+    - Handle format selection for output
+    - Write output to file or stdout based on --output flag
+    - Display summary to user
+    - _Requirements: 10.1, 10.8_

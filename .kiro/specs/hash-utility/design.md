@@ -19,16 +19,16 @@ The design prioritizes minimal binary size through careful dependency selection,
                  ▼
 ┌─────────────────────────────────────────────────────────┐
 │                  Command Dispatcher                      │
-│         (hash, scan, verify, benchmark, list)           │
-└─────┬──────────┬──────────┬──────────┬─────────────────┘
-      │          │          │          │
-      ▼          ▼          ▼          ▼
-┌──────────┐ ┌────────┐ ┌─────────┐ ┌──────────┐
-│  Hash    │ │ Scan   │ │ Verify  │ │Benchmark │
-│ Computer │ │ Engine │ │ Engine  │ │  Engine  │
-└────┬─────┘ └───┬────┘ └────┬────┘ └────┬─────┘
-     │           │           │           │
-     └───────────┴───────────┴───────────┘
+│    (hash, scan, verify, benchmark, compare, list)       │
+└─────┬──────────┬──────────┬──────────┬────────┬────────┘
+      │          │          │          │        │
+      ▼          ▼          ▼          ▼        ▼
+┌──────────┐ ┌────────┐ ┌─────────┐ ┌──────────┐ ┌────────┐
+│  Hash    │ │ Scan   │ │ Verify  │ │Benchmark │ │Compare │
+│ Computer │ │ Engine │ │ Engine  │ │  Engine  │ │ Engine │
+└────┬─────┘ └───┬────┘ └────┬────┘ └────┬─────┘ └───┬────┘
+     │           │           │           │           │
+     └───────────┴───────────┴───────────┴───────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -80,10 +80,22 @@ pub enum Command {
         database: PathBuf,
         directory: PathBuf,
     },
+    Compare {
+        database1: PathBuf,
+        database2: PathBuf,
+        output: Option<PathBuf>,
+        format: OutputFormat,
+    },
     Benchmark {
         size_mb: Option<usize>,
     },
     List,
+}
+
+pub enum OutputFormat {
+    PlainText,
+    Json,
+    Hashdeep,
 }
 
 pub fn parse_args() -> Result<Command, CliError>;
@@ -237,6 +249,46 @@ pub struct BenchmarkResult {
 }
 ```
 
+### Compare Engine
+
+**Responsibility:** Compare two hash databases and generate detailed comparison reports
+
+**Interface:**
+```rust
+pub struct CompareEngine;
+
+impl CompareEngine {
+    pub fn compare(
+        &self,
+        database1: &Path,
+        database2: &Path,
+    ) -> Result<CompareReport, CompareError>;
+}
+
+pub struct CompareReport {
+    pub db1_total_files: usize,
+    pub db2_total_files: usize,
+    pub unchanged_files: usize,
+    pub changed_files: Vec<ChangedFile>,
+    pub removed_files: Vec<PathBuf>,
+    pub added_files: Vec<PathBuf>,
+    pub duplicates_db1: Vec<DuplicateGroup>,
+    pub duplicates_db2: Vec<DuplicateGroup>,
+}
+
+pub struct ChangedFile {
+    pub path: PathBuf,
+    pub hash_db1: String,
+    pub hash_db2: String,
+}
+
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub paths: Vec<PathBuf>,
+    pub count: usize,
+}
+```
+
 ### Database Format Handler
 
 **Responsibility:** Read and write plain text hash database files
@@ -362,6 +414,36 @@ tness Properties
 
 **Validates: Requirements 9.4**
 
+### Property 11: Database comparison completeness
+
+*For any* two hash databases, the comparison should classify every file from both databases into exactly one category: unchanged, changed, removed, or added.
+
+**Validates: Requirements 10.3, 10.4, 10.5, 10.6**
+
+### Property 12: Duplicate detection accuracy
+
+*For any* hash database, the comparison should correctly identify all duplicate hashes (same hash appearing multiple times) and group them with their associated file paths.
+
+**Validates: Requirements 10.2**
+
+### Property 13: Comparison report summary correctness
+
+*For any* two hash databases, the comparison report summary counts should be mathematically consistent: unchanged + changed + removed = db1_total, and unchanged + changed + added = db2_total.
+
+**Validates: Requirements 10.7**
+
+### Property 14: Comparison output format consistency
+
+*For any* comparison report, the output format should match the requested format (plain text, JSON, or hashdeep) with all required fields present.
+
+**Validates: Requirements 10.8, 10.9**
+
+### Property 15: Compressed database handling
+
+*For any* compressed database file (.xz), the compare operation should automatically decompress it and produce identical results as comparing the uncompressed version.
+
+**Validates: Requirements 10.10, 10.11**
+
 ## Error Handling
 
 ### Error Categories
@@ -463,6 +545,21 @@ Property-based tests will verify:
    
 10. **File Output Isolation** - Generate hash operations with file output, verify stdout is empty
     - Tag: `Feature: hash-utility, Property 10: File output isolation`
+
+11. **Database Comparison Completeness** - Generate two databases, verify all files are classified
+    - Tag: `Feature: hash-utility, Property 11: Database comparison completeness`
+
+12. **Duplicate Detection Accuracy** - Generate databases with duplicates, verify correct grouping
+    - Tag: `Feature: hash-utility, Property 12: Duplicate detection accuracy`
+
+13. **Comparison Report Summary Correctness** - Verify summary counts are mathematically consistent
+    - Tag: `Feature: hash-utility, Property 13: Comparison report summary correctness`
+
+14. **Comparison Output Format Consistency** - Generate comparisons, verify output format matches request
+    - Tag: `Feature: hash-utility, Property 14: Comparison output format consistency`
+
+15. **Compressed Database Handling** - Generate compressed databases, verify compare works transparently
+    - Tag: `Feature: hash-utility, Property 15: Compressed database handling`
 
 ### Integration Testing
 

@@ -123,3 +123,21 @@ This document specifies requirements for a cross-platform console application th
 3. WHEN outputting to stdout, THEN the Hash Utility SHALL display results immediately as they are computed
 4. WHEN outputting to a file, THEN the Hash Utility SHALL write results to the specified path without displaying them to stdout
 5. WHEN reading Hash Database files, THEN the Hash Utility SHALL parse plain text format with `<hash> <filepath>` entries
+
+### Requirement 10
+
+**User Story:** As a system administrator, I want to compare two hash databases to identify changes, so that I can track file modifications and detect duplicates across different snapshots.
+
+#### Acceptance Criteria
+
+1. WHEN a user provides two Hash Database files, THEN the Hash Utility SHALL compare them and generate a detailed report
+2. WHEN comparing databases, THEN the Hash Utility SHALL identify and count duplicate files (same hash appearing multiple times within a single database)
+3. WHEN comparing databases, THEN the Hash Utility SHALL identify files that exist in both databases with identical hashes and report them as unchanged
+4. WHEN comparing databases, THEN the Hash Utility SHALL identify files that exist in both databases but with different hashes and report them as changed
+5. WHEN comparing databases, THEN the Hash Utility SHALL identify files that exist in the first database but not in the second and report them as removed
+6. WHEN comparing databases, THEN the Hash Utility SHALL identify files that exist in the second database but not in the first and report them as added
+7. WHEN comparing databases, THEN the Hash Utility SHALL provide a summary report including total files in each database, unchanged count, changed count, added count, removed count, and duplicate count
+8. WHEN a user specifies an output file, THEN the Hash Utility SHALL write the comparison report to the specified file in a structured format
+9. WHEN comparing databases, THEN the Hash Utility SHALL support the same output formats as other commands (plain text, JSON, hashdeep)
+10. WHEN comparing compressed database files (with .xz extension), THEN the Hash Utility SHALL automatically decompress them before comparison
+11. WHEN comparing databases in different formats (plain text, hashdeep, compressed), THEN the Hash Utility SHALL handle format detection and decompression transparently

@@ -1,0 +1,765 @@
+// Compare engine module
+// Compares two hash databases and generates detailed comparison reports
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use crate::database::{DatabaseHandler, DatabaseEntry};
+use crate::error::HashUtilityError;
+
+/// Result of comparing a single file between two databases
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChangedFile {
+    pub path: PathBuf,
+    pub hash_db1: String,
+    pub hash_db2: String,
+}
+
+/// Group of files with the same hash (duplicates)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub paths: Vec<PathBuf>,
+    pub count: usize,
+}
+
+/// Comprehensive comparison report between two databases
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompareReport {
+    pub db1_total_files: usize,
+    pub db2_total_files: usize,
+    pub unchanged_files: usize,
+    pub changed_files: Vec<ChangedFile>,
+    pub removed_files: Vec<PathBuf>,
+    pub added_files: Vec<PathBuf>,
+    pub duplicates_db1: Vec<DuplicateGroup>,
+    pub duplicates_db2: Vec<DuplicateGroup>,
+}
+
+impl CompareReport {
+    /// Display the comparison report in plain text format
+    pub fn display(&self) {
+        println!("\n=== Database Comparison Report ===\n");
+        
+        // Summary section
+        println!("Summary:");
+        println!("  Database 1: {} files", self.db1_total_files);
+        println!("  Database 2: {} files", self.db2_total_files);
+        println!("  Unchanged:  {} files", self.unchanged_files);
+        println!("  Changed:    {} files", self.changed_files.len());
+        println!("  Removed:    {} files", self.removed_files.len());
+        println!("  Added:      {} files", self.added_files.len());
+        println!("  Duplicates in DB1: {} groups", self.duplicates_db1.len());
+        println!("  Duplicates in DB2: {} groups", self.duplicates_db2.len());
+        
+        // Changed files section
+        if !self.changed_files.is_empty() {
+            println!("\nChanged Files:");
+            for changed in &self.changed_files {
+                println!("  {}", changed.path.display());
+                println!("    DB1: {}", changed.hash_db1);
+                println!("    DB2: {}", changed.hash_db2);
+            }
+        }
+        
+        // Removed files section
+        if !self.removed_files.is_empty() {
+            println!("\nRemoved Files (in DB1 but not DB2):");
+            for path in &self.removed_files {
+                println!("  {}", path.display());
+            }
+        }
+        
+        // Added files section
+        if !self.added_files.is_empty() {
+            println!("\nAdded Files (in DB2 but not DB1):");
+            for path in &self.added_files {
+                println!("  {}", path.display());
+            }
+        }
+        
+        // Duplicates in DB1
+        if !self.duplicates_db1.is_empty() {
+            println!("\nDuplicates in Database 1:");
+            for group in &self.duplicates_db1 {
+                println!("  Hash: {} ({} files)", group.hash, group.count);
+                for path in &group.paths {
+                    println!("    {}", path.display());
+                }
+            }
+        }
+        
+        // Duplicates in DB2
+        if !self.duplicates_db2.is_empty() {
+            println!("\nDuplicates in Database 2:");
+            for group in &self.duplicates_db2 {
+                println!("  Hash: {} ({} files)", group.hash, group.count);
+                for path in &group.paths {
+                    println!("    {}", path.display());
+                }
+            }
+        }
+        
+        println!();
+    }
+    
+    /// Format the comparison report as plain text string
+    pub fn to_plain_text(&self) -> String {
+        let mut output = String::new();
+        
+        output.push_str("\n=== Database Comparison Report ===\n\n");
+        
+        // Summary section
+        output.push_str("Summary:\n");
+        output.push_str(&format!("  Database 1: {} files\n", self.db1_total_files));
+        output.push_str(&format!("  Database 2: {} files\n", self.db2_total_files));
+        output.push_str(&format!("  Unchanged:  {} files\n", self.unchanged_files));
+        output.push_str(&format!("  Changed:    {} files\n", self.changed_files.len()));
+        output.push_str(&format!("  Removed:    {} files\n", self.removed_files.len()));
+        output.push_str(&format!("  Added:      {} files\n", self.added_files.len()));
+        output.push_str(&format!("  Duplicates in DB1: {} groups\n", self.duplicates_db1.len()));
+        output.push_str(&format!("  Duplicates in DB2: {} groups\n", self.duplicates_db2.len()));
+        
+        // Changed files section
+        if !self.changed_files.is_empty() {
+            output.push_str("\nChanged Files:\n");
+            for changed in &self.changed_files {
+                output.push_str(&format!("  {}\n", changed.path.display()));
+                output.push_str(&format!("    DB1: {}\n", changed.hash_db1));
+                output.push_str(&format!("    DB2: {}\n", changed.hash_db2));
+            }
+        }
+        
+        // Removed files section
+        if !self.removed_files.is_empty() {
+            output.push_str("\nRemoved Files (in DB1 but not DB2):\n");
+            for path in &self.removed_files {
+                output.push_str(&format!("  {}\n", path.display()));
+            }
+        }
+        
+        // Added files section
+        if !self.added_files.is_empty() {
+            output.push_str("\nAdded Files (in DB2 but not DB1):\n");
+            for path in &self.added_files {
+                output.push_str(&format!("  {}\n", path.display()));
+            }
+        }
+        
+        // Duplicates in DB1
+        if !self.duplicates_db1.is_empty() {
+            output.push_str("\nDuplicates in Database 1:\n");
+            for group in &self.duplicates_db1 {
+                output.push_str(&format!("  Hash: {} ({} files)\n", group.hash, group.count));
+                for path in &group.paths {
+                    output.push_str(&format!("    {}\n", path.display()));
+                }
+            }
+        }
+        
+        // Duplicates in DB2
+        if !self.duplicates_db2.is_empty() {
+            output.push_str("\nDuplicates in Database 2:\n");
+            for group in &self.duplicates_db2 {
+                output.push_str(&format!("  Hash: {} ({} files)\n", group.hash, group.count));
+                for path in &group.paths {
+                    output.push_str(&format!("    {}\n", path.display()));
+                }
+            }
+        }
+        
+        output.push('\n');
+        output
+    }
+    
+    /// Format the comparison report as JSON string
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        #[derive(serde::Serialize)]
+        struct JsonOutput {
+            metadata: Metadata,
+            summary: Summary,
+            unchanged_files: usize,
+            changed_files: Vec<ChangedFileJson>,
+            removed_files: Vec<String>,
+            added_files: Vec<String>,
+            duplicates_db1: Vec<DuplicateGroupJson>,
+            duplicates_db2: Vec<DuplicateGroupJson>,
+        }
+        
+        #[derive(serde::Serialize)]
+        struct Metadata {
+            timestamp: String,
+        }
+        
+        #[derive(serde::Serialize)]
+        struct Summary {
+            db1_total_files: usize,
+            db2_total_files: usize,
+            unchanged_count: usize,
+            changed_count: usize,
+            removed_count: usize,
+            added_count: usize,
+            duplicates_db1_count: usize,
+            duplicates_db2_count: usize,
+        }
+        
+        #[derive(serde::Serialize)]
+        struct ChangedFileJson {
+            path: String,
+            hash_db1: String,
+            hash_db2: String,
+        }
+        
+        #[derive(serde::Serialize)]
+        struct DuplicateGroupJson {
+            hash: String,
+            count: usize,
+            paths: Vec<String>,
+        }
+        
+        let output = JsonOutput {
+            metadata: Metadata {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            },
+            summary: Summary {
+                db1_total_files: self.db1_total_files,
+                db2_total_files: self.db2_total_files,
+                unchanged_count: self.unchanged_files,
+                changed_count: self.changed_files.len(),
+                removed_count: self.removed_files.len(),
+                added_count: self.added_files.len(),
+                duplicates_db1_count: self.duplicates_db1.len(),
+                duplicates_db2_count: self.duplicates_db2.len(),
+            },
+            unchanged_files: self.unchanged_files,
+            changed_files: self.changed_files.iter().map(|cf| ChangedFileJson {
+                path: cf.path.display().to_string(),
+                hash_db1: cf.hash_db1.clone(),
+                hash_db2: cf.hash_db2.clone(),
+            }).collect(),
+            removed_files: self.removed_files.iter().map(|p| p.display().to_string()).collect(),
+            added_files: self.added_files.iter().map(|p| p.display().to_string()).collect(),
+            duplicates_db1: self.duplicates_db1.iter().map(|dg| DuplicateGroupJson {
+                hash: dg.hash.clone(),
+                count: dg.count,
+                paths: dg.paths.iter().map(|p| p.display().to_string()).collect(),
+            }).collect(),
+            duplicates_db2: self.duplicates_db2.iter().map(|dg| DuplicateGroupJson {
+                hash: dg.hash.clone(),
+                count: dg.count,
+                paths: dg.paths.iter().map(|p| p.display().to_string()).collect(),
+            }).collect(),
+        };
+        
+        serde_json::to_string_pretty(&output)
+    }
+}
+
+/// Engine for comparing two hash databases
+pub struct CompareEngine;
+
+impl CompareEngine {
+    /// Create a new CompareEngine
+    pub fn new() -> Self {
+        CompareEngine
+    }
+    
+    /// Compare two hash databases and generate a detailed report
+    /// 
+    /// # Arguments
+    /// * `database1` - Path to the first database file
+    /// * `database2` - Path to the second database file
+    /// 
+    /// # Returns
+    /// A CompareReport containing all comparison findings
+    /// 
+    /// # Errors
+    /// Returns an error if either database cannot be read
+    pub fn compare(
+        &self,
+        database1: &Path,
+        database2: &Path,
+    ) -> Result<CompareReport, HashUtilityError> {
+        // Load both databases
+        let db1 = DatabaseHandler::read_database(database1)?;
+        let db2 = DatabaseHandler::read_database(database2)?;
+        
+        // Detect duplicates in each database
+        let duplicates_db1 = Self::find_duplicates(&db1);
+        let duplicates_db2 = Self::find_duplicates(&db2);
+        
+        // Get all unique file paths from both databases
+        let all_paths: HashSet<PathBuf> = db1.keys()
+            .chain(db2.keys())
+            .cloned()
+            .collect();
+        
+        // Classify files
+        let mut unchanged_count = 0;
+        let mut changed_files = Vec::new();
+        let mut removed_files = Vec::new();
+        let mut added_files = Vec::new();
+        
+        for path in all_paths {
+            match (db1.get(&path), db2.get(&path)) {
+                (Some(entry1), Some(entry2)) => {
+                    // File exists in both databases
+                    if entry1.hash == entry2.hash {
+                        // Hashes match - unchanged
+                        unchanged_count += 1;
+                    } else {
+                        // Hashes differ - changed
+                        changed_files.push(ChangedFile {
+                            path: path.clone(),
+                            hash_db1: entry1.hash.clone(),
+                            hash_db2: entry2.hash.clone(),
+                        });
+                    }
+                }
+                (Some(_), None) => {
+                    // File exists in DB1 but not DB2 - removed
+                    removed_files.push(path.clone());
+                }
+                (None, Some(_)) => {
+                    // File exists in DB2 but not DB1 - added
+                    added_files.push(path.clone());
+                }
+                (None, None) => {
+                    // This should never happen since we got the path from one of the databases
+                    unreachable!("Path should exist in at least one database");
+                }
+            }
+        }
+        
+        // Sort results for consistent output
+        changed_files.sort_by(|a, b| a.path.cmp(&b.path));
+        removed_files.sort();
+        added_files.sort();
+        
+        Ok(CompareReport {
+            db1_total_files: db1.len(),
+            db2_total_files: db2.len(),
+            unchanged_files: unchanged_count,
+            changed_files,
+            removed_files,
+            added_files,
+            duplicates_db1,
+            duplicates_db2,
+        })
+    }
+    
+    /// Find duplicate hashes within a database
+    /// 
+    /// # Arguments
+    /// * `database` - The database to search for duplicates
+    /// 
+    /// # Returns
+    /// A vector of DuplicateGroup, each containing files with the same hash
+    fn find_duplicates(database: &HashMap<PathBuf, DatabaseEntry>) -> Vec<DuplicateGroup> {
+        // Build a map from hash to list of paths
+        let mut hash_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        
+        for (path, entry) in database {
+            hash_to_paths
+                .entry(entry.hash.clone())
+                .or_insert_with(Vec::new)
+                .push(path.clone());
+        }
+        
+        // Filter to only groups with more than one file (duplicates)
+        let mut duplicates: Vec<DuplicateGroup> = hash_to_paths
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .map(|(hash, mut paths)| {
+                paths.sort();
+                let count = paths.len();
+                DuplicateGroup {
+                    hash,
+                    paths,
+                    count,
+                }
+            })
+            .collect();
+        
+        // Sort by hash for consistent output
+        duplicates.sort_by(|a, b| a.hash.cmp(&b.hash));
+        
+        duplicates
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use crate::database::DatabaseHandler;
+
+    #[test]
+    fn test_compare_identical_databases() {
+        // Create two identical databases
+        let db1_path = "test_compare_identical_db1.txt";
+        let db2_path = "test_compare_identical_db2.txt";
+        
+        let content = "hash1  sha256  normal  file1.txt\n\
+                       hash2  sha256  normal  file2.txt\n\
+                       hash3  sha256  normal  file3.txt\n";
+        
+        fs::write(db1_path, content).unwrap();
+        fs::write(db2_path, content).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 3);
+        assert_eq!(report.db2_total_files, 3);
+        assert_eq!(report.unchanged_files, 3);
+        assert_eq!(report.changed_files.len(), 0);
+        assert_eq!(report.removed_files.len(), 0);
+        assert_eq!(report.added_files.len(), 0);
+        assert_eq!(report.duplicates_db1.len(), 0);
+        assert_eq!(report.duplicates_db2.len(), 0);
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_with_changed_files() {
+        let db1_path = "test_compare_changed_db1.txt";
+        let db2_path = "test_compare_changed_db2.txt";
+        
+        let content1 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        let content2 = "hash1  sha256  normal  file1.txt\n\
+                        hash2_modified  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 3);
+        assert_eq!(report.db2_total_files, 3);
+        assert_eq!(report.unchanged_files, 2);
+        assert_eq!(report.changed_files.len(), 1);
+        assert_eq!(report.removed_files.len(), 0);
+        assert_eq!(report.added_files.len(), 0);
+        
+        let changed = &report.changed_files[0];
+        assert_eq!(changed.path, PathBuf::from("file2.txt"));
+        assert_eq!(changed.hash_db1, "hash2");
+        assert_eq!(changed.hash_db2, "hash2_modified");
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_with_removed_files() {
+        let db1_path = "test_compare_removed_db1.txt";
+        let db2_path = "test_compare_removed_db2.txt";
+        
+        let content1 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        let content2 = "hash1  sha256  normal  file1.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 3);
+        assert_eq!(report.db2_total_files, 2);
+        assert_eq!(report.unchanged_files, 2);
+        assert_eq!(report.changed_files.len(), 0);
+        assert_eq!(report.removed_files.len(), 1);
+        assert_eq!(report.added_files.len(), 0);
+        
+        assert_eq!(report.removed_files[0], PathBuf::from("file2.txt"));
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_with_added_files() {
+        let db1_path = "test_compare_added_db1.txt";
+        let db2_path = "test_compare_added_db2.txt";
+        
+        let content1 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n";
+        
+        let content2 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 2);
+        assert_eq!(report.db2_total_files, 3);
+        assert_eq!(report.unchanged_files, 2);
+        assert_eq!(report.changed_files.len(), 0);
+        assert_eq!(report.removed_files.len(), 0);
+        assert_eq!(report.added_files.len(), 1);
+        
+        assert_eq!(report.added_files[0], PathBuf::from("file3.txt"));
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_with_duplicates() {
+        let db1_path = "test_compare_duplicates_db1.txt";
+        let db2_path = "test_compare_duplicates_db2.txt";
+        
+        // DB1 has duplicates: file1 and file2 have the same hash
+        let content1 = "hash_duplicate  sha256  normal  file1.txt\n\
+                        hash_duplicate  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        // DB2 has different duplicates: file3 and file4 have the same hash
+        let content2 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n\
+                        hash_dup2  sha256  normal  file3.txt\n\
+                        hash_dup2  sha256  normal  file4.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 3);
+        assert_eq!(report.db2_total_files, 4);
+        assert_eq!(report.duplicates_db1.len(), 1);
+        assert_eq!(report.duplicates_db2.len(), 1);
+        
+        // Check DB1 duplicates
+        let dup1 = &report.duplicates_db1[0];
+        assert_eq!(dup1.hash, "hash_duplicate");
+        assert_eq!(dup1.count, 2);
+        assert_eq!(dup1.paths.len(), 2);
+        
+        // Check DB2 duplicates
+        let dup2 = &report.duplicates_db2[0];
+        assert_eq!(dup2.hash, "hash_dup2");
+        assert_eq!(dup2.count, 2);
+        assert_eq!(dup2.paths.len(), 2);
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_complex_scenario() {
+        let db1_path = "test_compare_complex_db1.txt";
+        let db2_path = "test_compare_complex_db2.txt";
+        
+        // Complex scenario with unchanged, changed, removed, added, and duplicates
+        let content1 = "hash_unchanged  sha256  normal  unchanged.txt\n\
+                        hash_old  sha256  normal  changed.txt\n\
+                        hash_removed  sha256  normal  removed.txt\n\
+                        hash_dup  sha256  normal  dup1.txt\n\
+                        hash_dup  sha256  normal  dup2.txt\n";
+        
+        let content2 = "hash_unchanged  sha256  normal  unchanged.txt\n\
+                        hash_new  sha256  normal  changed.txt\n\
+                        hash_added  sha256  normal  added.txt\n\
+                        hash_dup2  sha256  normal  dup3.txt\n\
+                        hash_dup2  sha256  normal  dup4.txt\n\
+                        hash_dup2  sha256  normal  dup5.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        assert_eq!(report.db1_total_files, 5);
+        assert_eq!(report.db2_total_files, 6);
+        assert_eq!(report.unchanged_files, 1);
+        assert_eq!(report.changed_files.len(), 1);
+        assert_eq!(report.removed_files.len(), 3); // removed.txt, dup1.txt, dup2.txt
+        assert_eq!(report.added_files.len(), 4); // added.txt, dup3.txt, dup4.txt, dup5.txt
+        assert_eq!(report.duplicates_db1.len(), 1);
+        assert_eq!(report.duplicates_db2.len(), 1);
+        
+        // Check changed file
+        let changed = &report.changed_files[0];
+        assert_eq!(changed.path, PathBuf::from("changed.txt"));
+        assert_eq!(changed.hash_db1, "hash_old");
+        assert_eq!(changed.hash_db2, "hash_new");
+        
+        // Check duplicates
+        assert_eq!(report.duplicates_db1[0].count, 2);
+        assert_eq!(report.duplicates_db2[0].count, 3);
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+    
+    #[test]
+    fn test_find_duplicates_no_duplicates() {
+        let mut db = HashMap::new();
+        db.insert(
+            PathBuf::from("file1.txt"),
+            DatabaseEntry {
+                hash: "hash1".to_string(),
+                algorithm: "sha256".to_string(),
+                fast_mode: false,
+            },
+        );
+        db.insert(
+            PathBuf::from("file2.txt"),
+            DatabaseEntry {
+                hash: "hash2".to_string(),
+                algorithm: "sha256".to_string(),
+                fast_mode: false,
+            },
+        );
+        
+        let duplicates = CompareEngine::find_duplicates(&db);
+        assert_eq!(duplicates.len(), 0);
+    }
+    
+    #[test]
+    fn test_find_duplicates_with_duplicates() {
+        let mut db = HashMap::new();
+        db.insert(
+            PathBuf::from("file1.txt"),
+            DatabaseEntry {
+                hash: "hash_dup".to_string(),
+                algorithm: "sha256".to_string(),
+                fast_mode: false,
+            },
+        );
+        db.insert(
+            PathBuf::from("file2.txt"),
+            DatabaseEntry {
+                hash: "hash_dup".to_string(),
+                algorithm: "sha256".to_string(),
+                fast_mode: false,
+            },
+        );
+        db.insert(
+            PathBuf::from("file3.txt"),
+            DatabaseEntry {
+                hash: "hash_unique".to_string(),
+                algorithm: "sha256".to_string(),
+                fast_mode: false,
+            },
+        );
+        
+        let duplicates = CompareEngine::find_duplicates(&db);
+        assert_eq!(duplicates.len(), 1);
+        
+        let dup_group = &duplicates[0];
+        assert_eq!(dup_group.hash, "hash_dup");
+        assert_eq!(dup_group.count, 2);
+        assert_eq!(dup_group.paths.len(), 2);
+    }
+    
+    #[test]
+    fn test_compare_compressed_databases() {
+        // Create two plain text databases
+        let db1_plain = "test_compare_compressed_db1_plain.txt";
+        let db2_plain = "test_compare_compressed_db2_plain.txt";
+        
+        let content1 = "hash1  sha256  normal  file1.txt\n\
+                        hash2  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n";
+        
+        let content2 = "hash1  sha256  normal  file1.txt\n\
+                        hash2_modified  sha256  normal  file2.txt\n\
+                        hash3  sha256  normal  file3.txt\n\
+                        hash4  sha256  normal  file4.txt\n";
+        
+        fs::write(db1_plain, content1).unwrap();
+        fs::write(db2_plain, content2).unwrap();
+        
+        // Compress both databases
+        let db1_compressed = DatabaseHandler::compress_database(Path::new(db1_plain)).unwrap();
+        let db2_compressed = DatabaseHandler::compress_database(Path::new(db2_plain)).unwrap();
+        
+        // Test 1: Compare two compressed databases
+        let engine = CompareEngine::new();
+        let report = engine.compare(&db1_compressed, &db2_compressed).unwrap();
+        
+        assert_eq!(report.db1_total_files, 3);
+        assert_eq!(report.db2_total_files, 4);
+        assert_eq!(report.unchanged_files, 2);
+        assert_eq!(report.changed_files.len(), 1);
+        assert_eq!(report.added_files.len(), 1);
+        
+        // Test 2: Compare compressed vs plain text
+        let report2 = engine.compare(&db1_compressed, Path::new(db2_plain)).unwrap();
+        
+        assert_eq!(report2.db1_total_files, 3);
+        assert_eq!(report2.db2_total_files, 4);
+        assert_eq!(report2.unchanged_files, 2);
+        assert_eq!(report2.changed_files.len(), 1);
+        
+        // Test 3: Compare plain text vs compressed
+        let report3 = engine.compare(Path::new(db1_plain), &db2_compressed).unwrap();
+        
+        assert_eq!(report3.db1_total_files, 3);
+        assert_eq!(report3.db2_total_files, 4);
+        assert_eq!(report3.unchanged_files, 2);
+        assert_eq!(report3.changed_files.len(), 1);
+        
+        // Cleanup
+        fs::remove_file(db1_plain).unwrap();
+        fs::remove_file(db2_plain).unwrap();
+        fs::remove_file(db1_compressed).unwrap();
+        fs::remove_file(db2_compressed).unwrap();
+    }
+    
+    #[test]
+    fn test_compare_report_summary_correctness() {
+        // Test that summary counts are mathematically consistent
+        let db1_path = "test_compare_summary_db1.txt";
+        let db2_path = "test_compare_summary_db2.txt";
+        
+        let content1 = "hash1  sha256  normal  unchanged.txt\n\
+                        hash2  sha256  normal  changed.txt\n\
+                        hash3  sha256  normal  removed.txt\n";
+        
+        let content2 = "hash1  sha256  normal  unchanged.txt\n\
+                        hash_new  sha256  normal  changed.txt\n\
+                        hash4  sha256  normal  added.txt\n";
+        
+        fs::write(db1_path, content1).unwrap();
+        fs::write(db2_path, content2).unwrap();
+        
+        let engine = CompareEngine::new();
+        let report = engine.compare(Path::new(db1_path), Path::new(db2_path)).unwrap();
+        
+        // Verify mathematical consistency:
+        // unchanged + changed + removed = db1_total
+        assert_eq!(
+            report.unchanged_files + report.changed_files.len() + report.removed_files.len(),
+            report.db1_total_files
+        );
+        
+        // unchanged + changed + added = db2_total
+        assert_eq!(
+            report.unchanged_files + report.changed_files.len() + report.added_files.len(),
+            report.db2_total_files
+        );
+        
+        fs::remove_file(db1_path).unwrap();
+        fs::remove_file(db2_path).unwrap();
+    }
+}
