@@ -360,48 +360,40 @@ impl VerifyEngine {
         })
     }
     
-    /// Optimized file collection with reduced canonicalization overhead
+    /// Optimized file collection using jwalk (same as scan)
     fn collect_files_optimized(&self, directory: &Path) -> Result<HashSet<PathBuf>, VerifyError> {
+        use jwalk::WalkDir;
+        
         let mut files = HashSet::new();
-        let mut path_cache = HashMap::new();
-        self.collect_files_recursive_optimized(directory, &mut files, &mut path_cache)?;
-        Ok(files)
-    }
-    
-    /// Helper function for optimized recursive file collection with path caching
-    fn collect_files_recursive_optimized(
-        &self,
-        directory: &Path,
-        files: &mut HashSet<PathBuf>,
-        path_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
-    ) -> Result<(), VerifyError> {
-        for entry in fs::read_dir(directory).map_err(|e| {
-            HashUtilityError::from_io_error(e, "reading directory", Some(directory.to_path_buf()))
-        })? {
-            let entry = entry.map_err(|e| {
-                HashUtilityError::from_io_error(e, "reading directory entry", Some(directory.to_path_buf()))
-            })?;
-            let path = entry.path();
-            
-            if path.is_file() {
-                // Check cache first to avoid redundant canonicalization
-                let canonical = if let Some(cached) = path_cache.get(&path) {
-                    cached.clone()
-                } else {
-                    let result = path.canonicalize().ok();
-                    path_cache.insert(path.clone(), result.clone());
-                    result
-                };
-                
-                if let Some(canonical_path) = canonical {
-                    files.insert(canonical_path);
+        
+        // Use jwalk for fast parallel directory traversal (same configuration as scan)
+        for entry_result in WalkDir::new(directory)
+            .parallelism(jwalk::Parallelism::RayonNewPool(0))
+            .skip_hidden(false)  // Don't skip hidden files
+            .follow_links(false) // Don't follow symlinks to avoid loops
+        {
+            match entry_result {
+                Ok(entry) => {
+                    // Only process regular files
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+                    
+                    let path = entry.path();
+                    
+                    // Canonicalize the path for consistent comparison
+                    if let Ok(canonical_path) = path.canonicalize() {
+                        files.insert(canonical_path);
+                    }
                 }
-            } else if path.is_dir() {
-                self.collect_files_recursive_optimized(&path, files, path_cache)?;
+                Err(e) => {
+                    // Log errors but continue processing
+                    eprintln!("Warning: Error walking directory: {}", e);
+                }
             }
         }
         
-        Ok(())
+        Ok(files)
     }
     
     /// Legacy method for backward compatibility
