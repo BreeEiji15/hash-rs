@@ -401,26 +401,50 @@
     - Verify that no unmatched files are included
     - _Requirements: 1.1, 2.1_
 
-- [ ] 26. Final integration and testing
-  - [ ] 26.1 Integration testing for new features
-    - Test stdin hashing with various inputs
-    - Test text hashing with special characters
-    - Test HMAC with different keys
-    - Test .hashignore with complex patterns
-    - Test hashdeep format compatibility
-    - Test JSON output parsing
-    - Test database compression
-    - Test wildcard patterns with various glob expressions
-    - _Requirements: 1.1, 2.1, 2.2, 9.1_
+- [ ] 26. Implement incremental updates (idempotency)
+  - [ ] 26.1 Extend database format to store metadata
+    - Add optional metadata fields to database entries: file size and modification time
+    - Update DatabaseHandler to write entries with format: `<hash>  <filepath>  <size>  <mtime>`
+    - Maintain backward compatibility: read entries with or without metadata
+    - Parse mtime as Unix timestamp (seconds since epoch)
+    - _Requirements: 2.2, 9.5_
   
-  - [x] 26.2 Update documentation
+  - [ ] 26.2 Add update command to CLI
+    - Add Update variant to Command enum with arguments: database file path, directory path
+    - Add `-u/--update` flag as alias for update command
+    - Add help text explaining incremental update behavior
+    - _Requirements: 2.1, 6.1, 6.2_
+  
+  - [ ] 26.3 Implement incremental update logic
+    - Create UpdateEngine that loads existing database with metadata
+    - For each file in directory, check if it exists in database
+    - If file exists in DB and mtime + size are unchanged, skip hashing and reuse existing hash
+    - If file is new or modified (mtime/size changed), compute new hash
+    - Use the same hash algorithm that was stored in the database for consistency
+    - Track statistics: files skipped, files rehashed, files added
+    - Write updated database with all entries (unchanged + modified + new)
+    - _Requirements: 2.1, 2.2, 2.4, 2.5_
+  
+  - [ ] 26.4 Add algorithm detection from database for standart format, for other formats person must specify algo
+    - If database has mixed algorithms or detection fails, require user to specify algorithm with --algorithm flag
+    - _Requirements: 1.2, 2.2_
+  
+  - [ ]* 26.5 Write property test for incremental update correctness
+    - **Property: Incremental update produces identical results to full scan**
+    - Verify that updating an unchanged directory produces identical database
+    - Verify that only modified files are rehashed
+    - Verify that mtime/size checks correctly identify unchanged files
+    - _Requirements: 2.1, 2.2_
+  
+  - [x] 27.2 Update documentation
     - Add examples for all new features to README
     - Document .hashignore syntax and behavior
     - Document hashdeep format compatibility
     - Document JSON output schema
+    - Document incremental update usage and benefits
     - _Requirements: 6.1, 6.2_
 
-- [x] 27. Set up GitHub Actions CI/CD pipeline
+- [x] 28. Set up GitHub Actions CI/CD pipeline
   - [x] 27.1 Create GitHub Actions workflow for multi-platform builds
     - Create `.github/workflows/release.yml` workflow file
     - Configure matrix builds for: Windows (x86_64, arm), macOS (x86_64, aarch64), Linux (x86_64, arm), FreeBSD (x86_64, arm)
@@ -442,7 +466,7 @@
     - Ensure all tests pass before creating release artifacts
     - _Requirements: 5.2_
 
-- [x] 28. Implement database comparison feature
+- [x] 29. Implement database comparison feature
   - [x] 28.1 Create CompareEngine with database comparison logic
     - Implement compare function to load two databases and compare entries
     - Classify files into: unchanged (same hash), changed (different hash), removed (in db1 only), added (in db2 only)
@@ -458,7 +482,7 @@
     - Handle format detection transparently
     - _Requirements: 10.10, 10.11_
 
-- [x] 29. Add compare command to CLI
+- [x] 30. Add compare command to CLI
   - [x] 29.1 Add compare command to clap CLI definition
     - Add Compare variant to Command enum
     - Define arguments: database1, database2, --output, --format
@@ -466,7 +490,7 @@
     - Add help text and examples
     - _Requirements: 10.1, 10.8, 10.9_
 
-- [x] 30. Implement compare output formatting
+- [x] 31. Implement compare output formatting
   - [x] 30.1 Implement plain text output for comparison reports
     - Format: summary section with counts, then sections for unchanged/changed/removed/added/duplicates
     - Include file paths and hash values for changed files
@@ -479,7 +503,7 @@
     - Ensure valid JSON format
     - _Requirements: 10.8, 10.9_
 
-- [x] 31. Integrate compare command into dispatcher
+- [x] 32. Integrate compare command into dispatcher
   - [x] 31.1 Add compare command handling to main dispatcher
     - Route Compare command to CompareEngine
     - Load both databases using DatabaseHandler
@@ -488,7 +512,7 @@
     - Display summary to user
     - _Requirements: 10.1, 10.8_
 
-- [x] 32. Optimize I/O buffer size and implement memory mapping
+- [x] 33. Optimize I/O buffer size and implement memory mapping
 
   - [x] 32.1 Add memmap2 dependency
     - Add memmap2 = "0.9" to Cargo.toml
@@ -514,7 +538,7 @@
     - Test with files of various sizes (small, medium, large)
     - _Requirements: 1.1, 1.5_
 
-- [x] 33. Implement pipelined scanning with producer-consumer pattern
+- [x] 34. Implement pipelined scanning with producer-consumer pattern
 
   - [x] 33.1 Add crossbeam-channel dependency
     - Add crossbeam-channel = "0.5" to Cargo.toml
@@ -535,7 +559,7 @@
     - Reduce memory usage by not storing all paths in Vec
     - _Requirements: 2.1, 2.5, 8.4_
 
-- [x] 34. Reduce excessive path canonicalization
+- [x] 35. Reduce excessive path canonicalization
 
   - [x] 34.1 Audit canonicalize() usage in src/verify.rs and src/scan.rs
     - Identify all calls to canonicalize() in hot paths
