@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use crate::error::HashUtilityError;
+use memmap2::Mmap;
 
 /// Trait for hash algorithm implementations
 pub trait Hasher: Send {
@@ -453,11 +454,14 @@ pub struct HashComputer {
 const FAST_MODE_SAMPLE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
 const FAST_MODE_THRESHOLD: u64 = 3 * FAST_MODE_SAMPLE_SIZE; // 300MB
 
+// Constants for memory mapping
+const MMAP_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2GB
+
 impl HashComputer {
-    /// Create a new HashComputer with default buffer size (64KB)
+    /// Create a new HashComputer with default buffer size (1MB)
     pub fn new() -> Self {
         Self {
-            buffer_size: 64 * 1024,
+            buffer_size: 1024 * 1024,
         }
     }
     
@@ -562,7 +566,16 @@ impl HashComputer {
         })
     }
     
-    /// Compute hash for a single file using streaming I/O
+    /// Compute hash for a single file using streaming I/O or memory mapping
+    /// 
+    /// For files smaller than 2GB, uses memory mapping to avoid kernel-to-userspace copy overhead.
+    /// For files larger than 2GB, falls back to buffered reading with 1MB buffer.
+    /// 
+    /// # Safety
+    /// 
+    /// Memory mapping assumes the file will not be modified by other processes during hashing.
+    /// If the file is modified concurrently, the hash result may be inconsistent.
+    /// This is acceptable for typical use cases where files are not being actively modified.
     pub fn compute_hash(
         &self,
         path: &Path,
@@ -572,22 +585,31 @@ impl HashComputer {
         let mut hasher = HashRegistry::get_hasher(algorithm)?;
         
         // Open file for reading with better error context
-        let mut file = File::open(path).map_err(|e| {
+        let file = File::open(path).map_err(|e| {
             HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
         })?;
         
-        // Create buffer for streaming reads
-        let mut buffer = vec![0u8; self.buffer_size];
+        // Get file size to determine whether to use memory mapping
+        let file_size = file.metadata()
+            .map_err(|e| HashUtilityError::from_io_error(e, "reading metadata", Some(path.to_path_buf())))?
+            .len();
         
-        // Stream file data through hasher
-        loop {
-            let bytes_read = file.read(&mut buffer).map_err(|e| {
-                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
-            })?;
-            if bytes_read == 0 {
-                break;
+        // Use memory mapping for files smaller than 2GB
+        if file_size > 0 && file_size < MMAP_THRESHOLD {
+            // Try to memory map the file
+            match unsafe { Mmap::map(&file) } {
+                Ok(mmap) => {
+                    // Hash the entire mapped file in one go
+                    hasher.update(&mmap[..]);
+                }
+                Err(_) => {
+                    // Fall back to buffered reading if mmap fails
+                    self.hash_with_buffered_io(&mut hasher, file, path)?;
+                }
             }
-            hasher.update(&buffer[..bytes_read]);
+        } else {
+            // Use buffered reading for large files (>2GB) or empty files
+            self.hash_with_buffered_io(&mut hasher, file, path)?;
         }
         
         // Finalize hash and convert to hex
@@ -599,6 +621,28 @@ impl HashComputer {
             hash: hash_hex,
             file_path: path.to_path_buf(),
         })
+    }
+    
+    /// Helper method to hash a file using buffered I/O
+    fn hash_with_buffered_io(
+        &self,
+        hasher: &mut Box<dyn Hasher>,
+        mut file: File,
+        path: &Path,
+    ) -> Result<(), HashError> {
+        let mut buffer = vec![0u8; self.buffer_size];
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).map_err(|e| {
+                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        
+        Ok(())
     }
     
     /// Compute multiple hashes from stdin in a single pass
@@ -653,6 +697,14 @@ impl HashComputer {
     }
     
     /// Compute multiple hashes for a single file in a single pass
+    /// 
+    /// For files smaller than 2GB, uses memory mapping to avoid kernel-to-userspace copy overhead.
+    /// For files larger than 2GB, falls back to buffered reading with 1MB buffer.
+    /// 
+    /// # Safety
+    /// 
+    /// Memory mapping assumes the file will not be modified by other processes during hashing.
+    /// If the file is modified concurrently, the hash results may be inconsistent.
     pub fn compute_multiple_hashes(
         &self,
         path: &Path,
@@ -666,26 +718,33 @@ impl HashComputer {
         }
         
         // Open file for reading with better error context
-        let mut file = File::open(path).map_err(|e| {
+        let file = File::open(path).map_err(|e| {
             HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
         })?;
         
-        // Create buffer for streaming reads
-        let mut buffer = vec![0u8; self.buffer_size];
+        // Get file size to determine whether to use memory mapping
+        let file_size = file.metadata()
+            .map_err(|e| HashUtilityError::from_io_error(e, "reading metadata", Some(path.to_path_buf())))?
+            .len();
         
-        // Stream file data through all hashers in single pass
-        loop {
-            let bytes_read = file.read(&mut buffer).map_err(|e| {
-                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
-            })?;
-            if bytes_read == 0 {
-                break;
+        // Use memory mapping for files smaller than 2GB
+        if file_size > 0 && file_size < MMAP_THRESHOLD {
+            // Try to memory map the file
+            match unsafe { Mmap::map(&file) } {
+                Ok(mmap) => {
+                    // Hash the entire mapped file with all hashers
+                    for (_, hasher) in &mut hashers {
+                        hasher.update(&mmap[..]);
+                    }
+                }
+                Err(_) => {
+                    // Fall back to buffered reading if mmap fails
+                    self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
+                }
             }
-            
-            // Update all hashers with the same data
-            for (_, hasher) in &mut hashers {
-                hasher.update(&buffer[..bytes_read]);
-            }
+        } else {
+            // Use buffered reading for large files (>2GB) or empty files
+            self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
         }
         
         // Finalize all hashes and collect results
@@ -702,6 +761,32 @@ impl HashComputer {
         }
         
         Ok(results)
+    }
+    
+    /// Helper method to hash a file with multiple hashers using buffered I/O
+    fn hash_multiple_with_buffered_io(
+        &self,
+        hashers: &mut [(String, Box<dyn Hasher>)],
+        mut file: File,
+        path: &Path,
+    ) -> Result<(), HashError> {
+        let mut buffer = vec![0u8; self.buffer_size];
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).map_err(|e| {
+                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            // Update all hashers with the same data
+            for (_, hasher) in hashers.iter_mut() {
+                hasher.update(&buffer[..bytes_read]);
+            }
+        }
+        
+        Ok(())
     }
     
     /// Compute hash for a file using fast mode (sampling strategy)
@@ -1034,7 +1119,7 @@ mod tests {
         let _ = &algorithms;
         
         // Just verify the computer was created successfully
-        assert_eq!(computer.buffer_size, 64 * 1024);
+        assert_eq!(computer.buffer_size, 1024 * 1024);
     }
     
     #[test]

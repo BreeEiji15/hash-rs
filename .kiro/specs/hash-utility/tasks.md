@@ -487,3 +487,65 @@
     - Write output to file or stdout based on --output flag
     - Display summary to user
     - _Requirements: 10.1, 10.8_
+
+- [x] 32. Optimize I/O buffer size and implement memory mapping
+
+  - [x] 32.1 Add memmap2 dependency
+    - Add memmap2 = "0.9" to Cargo.toml
+    - _Requirements: 1.5_
+  
+  - [x] 32.2 Increase standard buffer size for large files
+    - Update buffer size in src/hash.rs from 64KB to 1MB (1024 * 1024)
+    - Use larger buffer for files that don't qualify for memory mapping
+    - Improve throughput on modern NVMe drives by reducing system call overhead
+    - _Requirements: 1.5, 8.1, 8.2, 8.3_
+  
+  - [x] 32.3 Implement memory mapping for medium-sized files
+    - Use memmap2 for files between 0 bytes and 2GB
+    - Memory map files directly to avoid kernel-to-userspace copy overhead
+    - Fall back to buffered reading for files larger than 2GB
+    - Handle mmap errors gracefully and fall back to standard I/O
+    - Add safety documentation for concurrent file modification concerns
+    - _Requirements: 1.5, 8.1, 8.2, 8.3_
+  
+  - [ ]* 32.4 Write property test for mmap correctness
+    - **Property: Memory mapping produces identical hashes**
+    - Verify that mmap-based hashing produces same results as buffered I/O
+    - Test with files of various sizes (small, medium, large)
+    - _Requirements: 1.1, 1.5_
+
+- [x] 33. Implement pipelined scanning with producer-consumer pattern
+
+  - [x] 33.1 Add crossbeam-channel dependency
+    - Add crossbeam-channel = "0.5" to Cargo.toml
+    - _Requirements: 2.1, 8.4_
+  
+  - [x] 33.2 Add jwalk dependency for parallel directory walking
+    - Add jwalk = "0.8" to Cargo.toml
+    - jwalk provides fast parallel directory traversal
+    - _Requirements: 2.1, 8.4_
+  
+  - [x] 33.3 Refactor ScanEngine to use producer-consumer pattern
+    - Replace collect-then-process strategy with streaming approach
+    - Create bounded channel with backpressure (buffer size: 1000 entries)
+    - Spawn walker thread using jwalk to traverse directories
+    - Walker thread sends file paths to channel as they're discovered
+    - Use rayon's par_bridge to consume from channel in parallel
+    - Start hashing immediately as files are discovered (eliminate latency)
+    - Reduce memory usage by not storing all paths in Vec
+    - _Requirements: 2.1, 2.5, 8.4_
+
+- [x] 34. Reduce excessive path canonicalization
+
+  - [x] 34.1 Audit canonicalize() usage in src/verify.rs and src/scan.rs
+    - Identify all calls to canonicalize() in hot paths
+    - Document which calls are necessary vs redundant
+    - _Requirements: 4.2_
+  
+  - [x] 34.2 Optimize path canonicalization strategy
+    - Cache canonicalized root paths instead of calling repeatedly
+    - Use relative path operations where possible
+    - Only canonicalize once per directory, not per file
+    - Consider using Path::join() instead of canonicalize() in loops
+    - Measure performance improvement on network drives
+    - _Requirements: 4.2, 8.4_

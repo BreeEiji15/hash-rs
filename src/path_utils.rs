@@ -55,6 +55,23 @@ pub fn get_relative_path(path: &Path, base: &Path) -> io::Result<PathBuf> {
     }
 }
 
+/// Get a relative path from a pre-canonicalized base directory
+/// This is more efficient when the base path is reused multiple times
+/// If the path cannot be made relative, returns the absolute path
+pub fn get_relative_path_cached(path: &Path, canonical_base: &Path) -> io::Result<PathBuf> {
+    // Only canonicalize the file path
+    let canonical_path = path.canonicalize()?;
+    
+    // Try to strip the base prefix
+    match canonical_path.strip_prefix(canonical_base) {
+        Ok(relative) => Ok(relative.to_path_buf()),
+        Err(_) => {
+            // If we can't make it relative, return the canonical path
+            Ok(canonical_path)
+        }
+    }
+}
+
 /// Resolve a path that may be relative or absolute
 /// If relative, resolves against the provided base directory
 /// If absolute, uses the path as-is
@@ -203,6 +220,36 @@ mod tests {
         
         let relative = result.unwrap();
         assert!(!relative.is_absolute());
+        
+        // Cleanup
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn test_get_relative_path_cached() {
+        // Create a temporary directory structure
+        let test_dir = "test_relative_path_cached";
+        fs::create_dir_all(format!("{}/subdir", test_dir)).unwrap();
+        
+        let file_path = format!("{}/subdir/file.txt", test_dir);
+        fs::write(&file_path, b"test").unwrap();
+        
+        // Pre-canonicalize base path (simulating cached scenario)
+        let canonical_base = Path::new(test_dir).canonicalize().unwrap();
+        let file = Path::new(&file_path);
+        
+        // Get relative path using cached base
+        let result = get_relative_path_cached(&file, &canonical_base);
+        assert!(result.is_ok());
+        
+        let relative = result.unwrap();
+        assert!(!relative.is_absolute());
+        
+        // Verify it produces the same result as the non-cached version
+        let file_canonical = file.canonicalize().unwrap();
+        let result_original = get_relative_path(&file_canonical, Path::new(test_dir));
+        assert!(result_original.is_ok());
+        assert_eq!(relative, result_original.unwrap());
         
         // Cleanup
         fs::remove_dir_all(test_dir).unwrap();

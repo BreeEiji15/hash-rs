@@ -11,8 +11,11 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use rayon::prelude::*;
 use indicatif::{ProgressBar, ProgressStyle};
+use crossbeam_channel::{bounded, Sender};
+use jwalk::WalkDir;
 
 // Re-export HashUtilityError as ScanError for backward compatibility
 pub type ScanError = HashUtilityError;
@@ -109,20 +112,35 @@ impl ScanEngine {
             HashUtilityError::from_io_error(e, "scanning directory", Some(root.to_path_buf()))
         })?;
         
-        // Canonicalize output path to exclude it from scan
-        let canonical_output = output.canonicalize().ok();
+        // Get absolute path of output file to exclude it from scan
+        // We need to get the absolute path before the file exists
+        let output_absolute = if output.is_absolute() {
+            output.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(output))
+                .unwrap_or_else(|_| output.to_path_buf())
+        };
         
-        // Collect all files in the directory tree
+        // Collect all files in the directory tree (only for sequential mode)
         println!("Scanning directory: {}", root.display());
-        let files = self.collect_files_with_exclusion(root, canonical_output.as_deref())?;
-        println!("Found {} files to process", files.len());
+        let files = if !self.parallel {
+            self.collect_files_with_exclusion(root, Some(&output_absolute))?
+        } else {
+            // For parallel mode, we don't pre-collect files
+            Vec::new()
+        };
+        
+        if !self.parallel {
+            println!("Found {} files to process", files.len());
+        }
         
         if self.fast_mode {
             println!("Fast mode enabled: sampling first, middle, and last 100MB of large files");
         }
         
         if self.parallel {
-            self.scan_parallel(&files, algorithm, output, &canonical_root, start_time)
+            self.scan_parallel(&files, algorithm, output, &canonical_root, &output_absolute, start_time)
         } else {
             self.scan_sequential(&files, algorithm, output, &canonical_root, start_time)
         }
@@ -189,7 +207,8 @@ impl ScanEngine {
             match hash_result {
                 Ok(result) => {
                     // Try to get relative path for cleaner database entries
-                    let path_to_write = match path_utils::get_relative_path(file_path, canonical_root) {
+                    // Use cached version since canonical_root is already canonicalized
+                    let path_to_write = match path_utils::get_relative_path_cached(file_path, canonical_root) {
                         Ok(rel_path) => rel_path,
                         Err(_) => file_path.clone(),
                     };
@@ -267,13 +286,14 @@ impl ScanEngine {
         })
     }
     
-    /// Parallel scan implementation using rayon
+    /// Parallel scan implementation using producer-consumer pattern with jwalk and crossbeam-channel
     fn scan_parallel(
         &self,
-        files: &[PathBuf],
+        _files: &[PathBuf],
         algorithm: &str,
         output: &Path,
         canonical_root: &Path,
+        output_absolute: &Path,
         start_time: Instant,
     ) -> Result<ScanStats, ScanError> {
         // Thread-safe counters for progress tracking
@@ -282,17 +302,30 @@ impl ScanEngine {
         let files_skipped = Arc::new(Mutex::new(0usize));
         let total_bytes = Arc::new(Mutex::new(0u64));
         
-        // Create progress bar
-        let pb = ProgressBar::new(files.len() as u64);
+        // Create progress bar (we'll update the length as we discover files)
+        let pb = ProgressBar::new(0);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({percent}%) | Processed: {msg}")
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos} files | Processed: {msg}")
                 .unwrap()
                 .progress_chars("=>-")
         );
         
+        // Create bounded channel with backpressure (buffer size: 1000 entries)
+        let (sender, receiver) = bounded::<PathBuf>(1000);
+        
         // Capture fast_mode for use in closure
         let fast_mode = self.fast_mode;
+        
+        // Clone canonical_root and output_absolute for the walker thread
+        let walker_root = canonical_root.to_path_buf();
+        let use_ignore = self.use_ignore;
+        let output_to_exclude = output_absolute.to_path_buf();
+        
+        // Spawn walker thread using jwalk to traverse directories
+        let walker_handle = thread::spawn(move || {
+            Self::walk_directory_streaming(&walker_root, sender, use_ignore, Some(&output_to_exclude))
+        });
         
         // Clone Arc references for use in parallel closure
         let files_processed_clone = Arc::clone(&files_processed);
@@ -300,70 +333,82 @@ impl ScanEngine {
         let files_skipped_clone = Arc::clone(&files_skipped);
         let total_bytes_clone = Arc::clone(&total_bytes);
         let pb_clone = pb.clone();
+        let canonical_root_clone = canonical_root.to_path_buf();
         
-        // Compute hashes in parallel
-        let results: Vec<_> = files.par_iter().map(|file_path| {
-            // Check if file still exists and is accessible before processing
-            let metadata_check = fs::metadata(file_path);
-            if metadata_check.is_err() {
-                let mut skipped = files_skipped_clone.lock().unwrap();
-                *skipped += 1;
-                pb_clone.inc(1);
-                return None;
-            }
-            
-            // Update progress bar with counts instead of filename to avoid encoding issues
-            let processed = files_processed_clone.lock().unwrap();
-            let failed = files_failed_clone.lock().unwrap();
-            let skipped = files_skipped_clone.lock().unwrap();
-            pb_clone.set_message(format!("{} OK, {} failed, {} skipped", *processed, *failed, *skipped));
-            drop(processed);
-            drop(failed);
-            drop(skipped);
-            
-            // Compute hash for the file (using fast mode if enabled)
-            let computer = HashComputer::new();
-            let hash_result = if fast_mode {
-                computer.compute_hash_fast(file_path, algorithm)
-            } else {
-                computer.compute_hash(file_path, algorithm)
-            };
-            
-            let result = match hash_result {
-                Ok(result) => {
-                    // Try to get relative path for cleaner database entries
-                    let path_to_write = match path_utils::get_relative_path(file_path, canonical_root) {
-                        Ok(rel_path) => rel_path,
-                        Err(_) => file_path.clone(),
-                    };
-                    
-                    // Track file size
-                    if let Ok(metadata) = fs::metadata(file_path) {
-                        let mut bytes = total_bytes_clone.lock().unwrap();
-                        *bytes += metadata.len();
+        // Use rayon's par_bridge to consume from channel in parallel
+        // This starts hashing immediately as files are discovered
+        let results: Vec<_> = receiver
+            .into_iter()
+            .par_bridge()
+            .filter_map(|file_path| {
+                // Check if file still exists and is accessible before processing
+                let metadata_check = fs::metadata(&file_path);
+                if metadata_check.is_err() {
+                    let mut skipped = files_skipped_clone.lock().unwrap();
+                    *skipped += 1;
+                    pb_clone.inc(1);
+                    return None;
+                }
+                
+                // Update progress bar with counts instead of filename to avoid encoding issues
+                let processed = files_processed_clone.lock().unwrap();
+                let failed = files_failed_clone.lock().unwrap();
+                let skipped = files_skipped_clone.lock().unwrap();
+                pb_clone.set_message(format!("{} OK, {} failed, {} skipped", *processed, *failed, *skipped));
+                drop(processed);
+                drop(failed);
+                drop(skipped);
+                
+                // Compute hash for the file (using fast mode if enabled)
+                let computer = HashComputer::new();
+                let hash_result = if fast_mode {
+                    computer.compute_hash_fast(&file_path, algorithm)
+                } else {
+                    computer.compute_hash(&file_path, algorithm)
+                };
+                
+                let result = match hash_result {
+                    Ok(result) => {
+                        // Try to get relative path for cleaner database entries
+                        // Use cached version since canonical_root_clone is already canonicalized
+                        let path_to_write = match path_utils::get_relative_path_cached(&file_path, &canonical_root_clone) {
+                            Ok(rel_path) => rel_path,
+                            Err(_) => file_path.clone(),
+                        };
+                        
+                        // Track file size
+                        if let Ok(metadata) = fs::metadata(&file_path) {
+                            let mut bytes = total_bytes_clone.lock().unwrap();
+                            *bytes += metadata.len();
+                        }
+                        
+                        // Update success counter
+                        let mut processed = files_processed_clone.lock().unwrap();
+                        *processed += 1;
+                        
+                        Some((result.hash, path_to_write))
                     }
-                    
-                    // Update success counter
-                    let mut processed = files_processed_clone.lock().unwrap();
-                    *processed += 1;
-                    
-                    Some((result.hash, path_to_write))
-                }
-                Err(e) => {
-                    // Log error but continue processing
-                    eprintln!("Warning: Failed to hash {}: {}", file_path.display(), e);
-                    
-                    // Update failure counter
-                    let mut failed = files_failed_clone.lock().unwrap();
-                    *failed += 1;
-                    
-                    None
-                }
-            };
-            
-            pb_clone.inc(1);
-            result
-        }).collect();
+                    Err(e) => {
+                        // Log error but continue processing
+                        eprintln!("Warning: Failed to hash {}: {}", file_path.display(), e);
+                        
+                        // Update failure counter
+                        let mut failed = files_failed_clone.lock().unwrap();
+                        *failed += 1;
+                        
+                        None
+                    }
+                };
+                
+                pb_clone.inc(1);
+                result
+            })
+            .collect();
+        
+        // Wait for walker thread to complete
+        if let Err(e) = walker_handle.join() {
+            eprintln!("Warning: Walker thread panicked: {:?}", e);
+        }
         
         let duration = start_time.elapsed();
         
@@ -383,7 +428,7 @@ impl ScanEngine {
             }
         }
         
-        for result in results.iter().flatten() {
+        for result in results.iter() {
             let write_result = match self.format {
                 DatabaseFormat::Standard => {
                     DatabaseHandler::write_entry(
@@ -448,6 +493,79 @@ impl ScanEngine {
         })
     }
     
+    /// Walk directory using jwalk and send file paths to channel as they're discovered
+    /// This is the producer in the producer-consumer pattern
+    fn walk_directory_streaming(
+        root: &Path,
+        sender: Sender<PathBuf>,
+        use_ignore: bool,
+        exclude_file: Option<&Path>,
+    ) -> Result<(), ScanError> {
+        // Load .hashignore patterns if enabled
+        let ignore_handler = if use_ignore {
+            match IgnoreHandler::new(root) {
+                Ok(handler) => Some(handler),
+                Err(e) => {
+                    eprintln!("Warning: Failed to load .hashignore: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        
+        // Canonicalize exclude path once before the loop to avoid redundant calls
+        let canonical_exclude = exclude_file.and_then(|p| p.canonicalize().ok());
+        
+        // Use jwalk for parallel directory traversal
+        // Set parallelism to 1 to avoid nested rayon issues
+        for entry_result in WalkDir::new(root).parallelism(jwalk::Parallelism::Serial) {
+            match entry_result {
+                Ok(entry) => {
+                    let path = entry.path();
+                    
+                    // Only process regular files
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+                    
+                    // Check if this is the excluded file
+                    if let Some(ref exclude_canonical) = canonical_exclude {
+                        // Compare canonical paths (only canonicalize current path once)
+                        if let Ok(canonical_path) = path.canonicalize() {
+                            if &canonical_path == exclude_canonical {
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    // Check if this path should be ignored
+                    if let Some(ref handler) = ignore_handler {
+                        if let Ok(rel_path) = path.strip_prefix(root) {
+                            if handler.should_ignore(rel_path, false) {
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    // Send file path to channel
+                    // If channel is full, this will block (backpressure)
+                    if sender.send(path).is_err() {
+                        // Receiver has been dropped, stop walking
+                        break;
+                    }
+                }
+                Err(e) => {
+                    // Log errors during directory scans without stopping
+                    eprintln!("Warning: Error walking directory: {}", e);
+                }
+            }
+        }
+        
+        // Channel will be closed when sender is dropped
+        Ok(())
+    }
+    
     /// Recursively collect all regular files in a directory tree
     /// 
     /// # Arguments
@@ -496,11 +614,29 @@ impl ScanEngine {
         ignore_handler: Option<&IgnoreHandler>,
         exclude_file: Option<&Path>,
     ) -> Result<(), ScanError> {
+        self.collect_files_recursive_with_cache(root, dir, files, ignore_handler, exclude_file, &mut None)
+    }
+    
+    /// Helper function for recursive file collection with cached exclude path
+    fn collect_files_recursive_with_cache(
+        &self,
+        root: &Path,
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+        ignore_handler: Option<&IgnoreHandler>,
+        exclude_file: Option<&Path>,
+        canonical_exclude_cache: &mut Option<PathBuf>,
+    ) -> Result<(), ScanError> {
         // Check if path exists and is accessible
         if !dir.exists() {
             return Err(HashUtilityError::DirectoryNotFound {
                 path: dir.to_path_buf(),
             });
+        }
+        
+        // Canonicalize exclude path once on first call
+        if canonical_exclude_cache.is_none() && exclude_file.is_some() {
+            *canonical_exclude_cache = exclude_file.and_then(|p| p.canonicalize().ok());
         }
         
         // Read directory entries
@@ -538,10 +674,10 @@ impl ScanEngine {
             
             let is_dir = metadata.is_dir();
             
-            // Check if this is the excluded file
-            if let Some(exclude) = exclude_file {
-                if let (Ok(canonical_path), Ok(canonical_exclude)) = (path.canonicalize(), exclude.canonicalize()) {
-                    if canonical_path == canonical_exclude {
+            // Check if this is the excluded file using cached canonical path
+            if let Some(ref exclude_canonical) = canonical_exclude_cache {
+                if let Ok(canonical_path) = path.canonicalize() {
+                    if &canonical_path == exclude_canonical {
                         // Skip the excluded file
                         continue;
                     }
@@ -563,8 +699,8 @@ impl ScanEngine {
                 // Add regular files to the list
                 files.push(path);
             } else if is_dir {
-                // Recursively process subdirectories
-                if let Err(e) = self.collect_files_recursive(root, &path, files, ignore_handler, exclude_file) {
+                // Recursively process subdirectories with cached exclude path
+                if let Err(e) = self.collect_files_recursive_with_cache(root, &path, files, ignore_handler, exclude_file, canonical_exclude_cache) {
                     // Log error but continue with other directories (Requirement 2.4)
                     eprintln!("Warning: Error processing directory {}: {}", path.display(), e);
                 }
