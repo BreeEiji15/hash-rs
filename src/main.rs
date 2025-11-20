@@ -18,7 +18,7 @@ use verify::VerifyEngine;
 use benchmark::BenchmarkEngine;
 use database::DatabaseFormat;
 use error::HashUtilityError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::io::IsTerminal;
 
@@ -96,6 +96,9 @@ fn handle_hash_command(
             // Expand wildcard pattern to get list of files
             let files = wildcard::expand_pattern(pattern)?;
             
+            // Determine if we should show progress (only for single file)
+            let show_progress = files.len() == 1;
+            
             // Hash all matched files
             let mut all_results = Vec::new();
             for file_path in files {
@@ -105,8 +108,8 @@ fn handle_hash_command(
                         all_results.push(computer.compute_hash_fast(&file_path, algorithm)?);
                     }
                 } else {
-                    // Use normal mode
-                    let file_results = computer.compute_multiple_hashes(&file_path, algorithms)?;
+                    // Use normal mode with progress bar for single large files
+                    let file_results = computer.compute_multiple_hashes_with_progress(&file_path, algorithms, show_progress)?;
                     all_results.extend(file_results);
                 }
             }
@@ -173,9 +176,39 @@ fn handle_hash_command(
     } else {
         // Plain text output
         let mut output_lines = Vec::new();
-        for result in results {
-            output_lines.push(format!("{}  {}", result.hash, result.file_path.display()));
+        
+        // Group results by file path for better formatting when multiple algorithms are used
+        if algorithms.len() > 1 {
+            // Multiple algorithms - show algorithm name with each hash
+            use std::collections::HashMap;
+            let mut by_file: HashMap<PathBuf, Vec<&hash::HashResult>> = HashMap::new();
+            for result in &results {
+                by_file.entry(result.file_path.clone()).or_insert_with(Vec::new).push(result);
+            }
+            
+            let num_files = by_file.len();
+            for (file_path, file_results) in by_file {
+                if num_files > 1 {
+                    output_lines.push(format!("{}:", file_path.display()));
+                }
+                for result in file_results {
+                    if num_files > 1 {
+                        output_lines.push(format!("  {} ({})", result.hash, result.algorithm.to_uppercase()));
+                    } else {
+                        output_lines.push(format!("{} ({})  {}", result.hash, result.algorithm.to_uppercase(), result.file_path.display()));
+                    }
+                }
+                if num_files > 1 {
+                    output_lines.push(String::new()); // Empty line between files
+                }
+            }
+        } else {
+            // Single algorithm - use traditional format
+            for result in results {
+                output_lines.push(format!("{}  {}", result.hash, result.file_path.display()));
+            }
         }
+        
         output_lines.join("\n") + "\n"
     };
     

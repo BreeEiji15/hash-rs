@@ -6,6 +6,7 @@ use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use crate::error::HashUtilityError;
 use memmap2::Mmap;
+use std::io::IsTerminal;
 
 /// Trait for hash algorithm implementations
 pub trait Hasher: Send {
@@ -468,6 +469,10 @@ const FAST_MODE_THRESHOLD: u64 = 3 * FAST_MODE_SAMPLE_SIZE; // 300MB
 // Constants for memory mapping
 const MMAP_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2GB
 
+// Constants for progress bar
+const PROGRESS_BAR_THRESHOLD: u64 = 1024 * 1024 * 1024; // 1GB
+const PROGRESS_UPDATE_INTERVAL_MS: u64 = 100; // 10 times per second
+
 impl HashComputer {
     /// Create a new HashComputer with default buffer size (1MB)
     pub fn new() -> Self {
@@ -592,6 +597,19 @@ impl HashComputer {
         path: &Path,
         algorithm: &str,
     ) -> Result<HashResult, HashError> {
+        self.compute_hash_with_progress(path, algorithm, false)
+    }
+    
+    /// Compute hash for a single file with optional progress bar
+    /// 
+    /// If show_progress is true and the file is larger than 1GB and stdout is a TTY,
+    /// displays a progress bar that updates 10 times per second.
+    pub fn compute_hash_with_progress(
+        &self,
+        path: &Path,
+        algorithm: &str,
+        show_progress: bool,
+    ) -> Result<HashResult, HashError> {
         // Get hasher for the specified algorithm
         let mut hasher = HashRegistry::get_hasher(algorithm)?;
         
@@ -605,22 +623,36 @@ impl HashComputer {
             .map_err(|e| HashUtilityError::from_io_error(e, "reading metadata", Some(path.to_path_buf())))?
             .len();
         
+        // Determine if we should show progress bar
+        let should_show_progress = show_progress 
+            && file_size > PROGRESS_BAR_THRESHOLD 
+            && std::io::stdout().is_terminal();
+        
         // Use memory mapping for files smaller than 2GB
         if file_size > 0 && file_size < MMAP_THRESHOLD {
             // Try to memory map the file
             match unsafe { Mmap::map(&file) } {
                 Ok(mmap) => {
                     // Hash the entire mapped file in one go
+                    // Note: Progress bar not shown for mmap as it's very fast
                     hasher.update(&mmap[..]);
                 }
                 Err(_) => {
                     // Fall back to buffered reading if mmap fails
-                    self.hash_with_buffered_io(&mut hasher, file, path)?;
+                    if should_show_progress {
+                        self.hash_with_buffered_io_progress(&mut hasher, file, path, file_size)?;
+                    } else {
+                        self.hash_with_buffered_io(&mut hasher, file, path)?;
+                    }
                 }
             }
         } else {
             // Use buffered reading for large files (>2GB) or empty files
-            self.hash_with_buffered_io(&mut hasher, file, path)?;
+            if should_show_progress {
+                self.hash_with_buffered_io_progress(&mut hasher, file, path, file_size)?;
+            } else {
+                self.hash_with_buffered_io(&mut hasher, file, path)?;
+            }
         }
         
         // Finalize hash and convert to hex
@@ -652,6 +684,57 @@ impl HashComputer {
             }
             hasher.update(&buffer[..bytes_read]);
         }
+        
+        Ok(())
+    }
+    
+    /// Helper method to hash a file using buffered I/O with progress bar
+    fn hash_with_buffered_io_progress(
+        &self,
+        hasher: &mut Box<dyn Hasher>,
+        mut file: File,
+        path: &Path,
+        file_size: u64,
+    ) -> Result<(), HashError> {
+        use indicatif::{ProgressBar, ProgressStyle};
+        use std::time::{Duration, Instant};
+        
+        // Create progress bar
+        let pb = ProgressBar::new(file_size);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{msg}\n[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .progress_chars("#>-")
+        );
+        pb.set_message(format!("Hashing: {}", path.display()));
+        
+        let mut buffer = vec![0u8; self.buffer_size];
+        let mut bytes_processed = 0u64;
+        let mut last_update = Instant::now();
+        let update_interval = Duration::from_millis(PROGRESS_UPDATE_INTERVAL_MS);
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).map_err(|e| {
+                pb.finish_and_clear();
+                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+            bytes_processed += bytes_read as u64;
+            
+            // Update progress bar at the specified interval
+            let now = Instant::now();
+            if now.duration_since(last_update) >= update_interval {
+                pb.set_position(bytes_processed);
+                last_update = now;
+            }
+        }
+        
+        // Finish progress bar
+        pb.finish_and_clear();
         
         Ok(())
     }
@@ -721,6 +804,19 @@ impl HashComputer {
         path: &Path,
         algorithms: &[String],
     ) -> Result<Vec<HashResult>, HashError> {
+        self.compute_multiple_hashes_with_progress(path, algorithms, false)
+    }
+    
+    /// Compute multiple hashes for a single file with optional progress bar
+    /// 
+    /// If show_progress is true and the file is larger than 1GB and stdout is a TTY,
+    /// displays a progress bar that updates 10 times per second.
+    pub fn compute_multiple_hashes_with_progress(
+        &self,
+        path: &Path,
+        algorithms: &[String],
+        show_progress: bool,
+    ) -> Result<Vec<HashResult>, HashError> {
         // Get hashers for all specified algorithms
         let mut hashers: Vec<(String, Box<dyn Hasher>)> = Vec::new();
         for algorithm in algorithms {
@@ -738,24 +834,38 @@ impl HashComputer {
             .map_err(|e| HashUtilityError::from_io_error(e, "reading metadata", Some(path.to_path_buf())))?
             .len();
         
+        // Determine if we should show progress bar
+        let should_show_progress = show_progress 
+            && file_size > PROGRESS_BAR_THRESHOLD 
+            && std::io::stdout().is_terminal();
+        
         // Use memory mapping for files smaller than 2GB
         if file_size > 0 && file_size < MMAP_THRESHOLD {
             // Try to memory map the file
             match unsafe { Mmap::map(&file) } {
                 Ok(mmap) => {
                     // Hash the entire mapped file with all hashers
+                    // Note: Progress bar not shown for mmap as it's very fast
                     for (_, hasher) in &mut hashers {
                         hasher.update(&mmap[..]);
                     }
                 }
                 Err(_) => {
                     // Fall back to buffered reading if mmap fails
-                    self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
+                    if should_show_progress {
+                        self.hash_multiple_with_buffered_io_progress(&mut hashers, file, path, file_size)?;
+                    } else {
+                        self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
+                    }
                 }
             }
         } else {
             // Use buffered reading for large files (>2GB) or empty files
-            self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
+            if should_show_progress {
+                self.hash_multiple_with_buffered_io_progress(&mut hashers, file, path, file_size)?;
+            } else {
+                self.hash_multiple_with_buffered_io(&mut hashers, file, path)?;
+            }
         }
         
         // Finalize all hashes and collect results
@@ -796,6 +906,62 @@ impl HashComputer {
                 hasher.update(&buffer[..bytes_read]);
             }
         }
+        
+        Ok(())
+    }
+    
+    /// Helper method to hash a file with multiple hashers using buffered I/O with progress bar
+    fn hash_multiple_with_buffered_io_progress(
+        &self,
+        hashers: &mut [(String, Box<dyn Hasher>)],
+        mut file: File,
+        path: &Path,
+        file_size: u64,
+    ) -> Result<(), HashError> {
+        use indicatif::{ProgressBar, ProgressStyle};
+        use std::time::{Duration, Instant};
+        
+        // Create progress bar
+        let pb = ProgressBar::new(file_size);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{msg}\n[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .progress_chars("#>-")
+        );
+        pb.set_message(format!("Hashing: {}", path.display()));
+        
+        let mut buffer = vec![0u8; self.buffer_size];
+        let mut bytes_processed = 0u64;
+        let mut last_update = Instant::now();
+        let update_interval = Duration::from_millis(PROGRESS_UPDATE_INTERVAL_MS);
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).map_err(|e| {
+                pb.finish_and_clear();
+                HashUtilityError::from_io_error(e, "reading", Some(path.to_path_buf()))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            // Update all hashers with the same data
+            for (_, hasher) in hashers.iter_mut() {
+                hasher.update(&buffer[..bytes_read]);
+            }
+            
+            bytes_processed += bytes_read as u64;
+            
+            // Update progress bar at the specified interval
+            let now = Instant::now();
+            if now.duration_since(last_update) >= update_interval {
+                pb.set_position(bytes_processed);
+                last_update = now;
+            }
+        }
+        
+        // Finish progress bar
+        pb.finish_and_clear();
         
         Ok(())
     }
