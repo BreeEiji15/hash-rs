@@ -573,3 +573,29 @@
     - Consider using Path::join() instead of canonicalize() in loops
     - Measure performance improvement on network drives
     - _Requirements: 4.2, 8.4_
+
+- [x] 36. Enable multi-threaded BLAKE3 hashing for single files
+
+  - [x] 36.1 Enable rayon feature for blake3 crate
+    - Update Cargo.toml to enable the rayon feature for blake3: `blake3 = { version = "1.8", features = ["rayon"] }`
+    - This enables multi-threaded hashing within a single file using all available CPU cores
+    - _Requirements: 1.3, 8.1, 8.2, 8.3, 8.4_
+  
+  - [x] 36.2 Update Blake3Wrapper to use multi-threaded update
+    - Modify Blake3Wrapper in src/hash.rs to use `update_rayon()` instead of `update()` when the rayon feature is enabled
+    - Use conditional compilation to maintain compatibility: use `update_rayon()` when rayon is available, fall back to `update()` otherwise
+    - Ensure the Hasher trait implementation for Blake3Wrapper calls the appropriate method
+    - Document that BLAKE3 will automatically use all CPU cores for large files when rayon is enabled
+    - _Requirements: 1.3, 8.1, 8.2, 8.3, 8.4_
+  
+  - [ ]* 36.3 Write property test for multi-threaded BLAKE3 correctness
+    - **Property: Multi-threaded BLAKE3 produces identical results**
+    - Verify that BLAKE3 with rayon produces the same hash as single-threaded BLAKE3
+    - Test with files of various sizes (small, medium, large)
+    - _Requirements: 1.1, 1.3, 8.4_
+  
+  - [ ]* 36.4 Benchmark multi-threaded BLAKE3 performance
+    - Add benchmark test to verify multi-threaded BLAKE3 is faster than single-threaded
+    - Measure throughput improvement on multi-core systems
+    - Document expected performance gains in README
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_

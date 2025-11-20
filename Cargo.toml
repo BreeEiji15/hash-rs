@@ -14,7 +14,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
 blake2 = "0.10"
-blake3 = "1.8"
+blake3 = { version = "1.8", features = ["rayon"] }
 rayon = "1.11"
 indicatif = "0.17"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

@@ -244,11 +244,22 @@ impl Hasher for Blake2s256Wrapper {
 }
 
 // BLAKE3 wrapper
+// 
+// When the rayon feature is enabled for blake3, this wrapper automatically uses
+// multi-threaded hashing for large files, utilizing all available CPU cores.
+// This provides significant performance improvements on multi-core systems.
+// 
+// The blake3 crate's update_rayon() method is always available when the rayon
+// feature is enabled, and it automatically parallelizes the hashing across
+// multiple CPU cores for better throughput.
 pub struct Blake3Wrapper(Blake3Hasher);
 
 impl Hasher for Blake3Wrapper {
     fn update(&mut self, data: &[u8]) {
-        self.0.update(data);
+        // The blake3 crate with rayon feature enabled provides update_rayon()
+        // which automatically uses multi-threaded hashing for large inputs.
+        // Since we've enabled the rayon feature in Cargo.toml, we can use it directly.
+        self.0.update_rayon(data);
     }
     
     fn finalize(self: Box<Self>) -> Vec<u8> {
